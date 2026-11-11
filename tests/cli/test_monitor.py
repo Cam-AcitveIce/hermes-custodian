@@ -84,3 +84,29 @@ def test_monitor_rereads_interval_each_cycle_and_enforces_minimum(tmp_path, monk
     # Cycle 2 after scan 2 clamps 3s to the 10s minimum (2 x 5s heartbeats).
     assert waits == [5, 5, 5, 5, 5, 5, 5]
 
+
+
+def test_rejected_monitor_closes_fd_without_unlocking(tmp_path, monkeypatch):
+    from custodian import _platform
+    from custodian.monitor import run_monitor
+
+    class Engine:
+        def settings(self): return {'interval_seconds': 10}
+
+    attempted = []
+
+    def busy(fd):
+        attempted.append(fd)
+        return False
+
+    def unowned_unlock(fd):
+        pytest.fail('Must not unlock a descriptor whose lock was never acquired')
+
+    monkeypatch.setattr(_platform, 'try_lock_exclusive', busy)
+    monkeypatch.setattr(_platform, 'unlock', unowned_unlock)
+    with pytest.raises(RuntimeError, match='already running'):
+        run_monitor(Engine(), tmp_path, once=True)
+    assert len(attempted) == 1
+    with pytest.raises(OSError):
+        os.fstat(attempted[0])
+    assert not (tmp_path / 'monitor.json').exists()

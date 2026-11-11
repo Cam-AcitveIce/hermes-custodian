@@ -22,7 +22,7 @@ def test_persistent_password_verifier_never_stores_plaintext(tmp_path):
     assert not restored.authenticate('someone-else', 'synthetic-password-for-tests-only')
 
 
-def test_verifier_symlink_and_expensive_parameter_tampering_fail_closed(tmp_path, monkeypatch):
+def test_expensive_parameter_tampering_fails_before_hashing(tmp_path, monkeypatch):
     from custodian.dashboard_auth import DashboardAuth
     import hashlib
     auth = DashboardAuth(tmp_path / 'state')
@@ -33,10 +33,17 @@ def test_verifier_symlink_and_expensive_parameter_tampering_fail_closed(tmp_path
     path.write_text(json.dumps(record))
     monkeypatch.setattr(hashlib, 'scrypt', lambda *a, **k: pytest.fail('Invalid parameters must never reach hashing'))
     assert not auth.authenticate('cam-test', 'anything')
-    path.unlink()
+
+
+def test_verifier_symlink_fails_closed_without_writing_target(tmp_path):
+    from custodian.dashboard_auth import DashboardAuth
+    auth = DashboardAuth(tmp_path / 'state')
+    path = auth.path
     path.symlink_to(tmp_path / 'outside')
-    with pytest.raises(OSError):
+    with pytest.raises((OSError, ValueError)):
         auth.configure('cam-test', 'synthetic-password-for-tests-only')
+    assert not auth.configured()
+    assert path.is_symlink()
     assert not (tmp_path / 'outside').exists()
 
 

@@ -686,7 +686,7 @@ def test_interprocess_lock_times_out_and_closes_its_handle(fake):
     fake.add(path)
     fake.locked.add(str(path))
     started = time.monotonic()
-    with pytest.raises(TimeoutError):
+    with pytest.raises(TimeoutError, match='Operation in progress.*scan.lock.*0.12s'):
         with W.interprocess_lock(path, 0.12):
             raise AssertionError('lock must not be acquired')
     assert 0.1 <= time.monotonic() - started < 3

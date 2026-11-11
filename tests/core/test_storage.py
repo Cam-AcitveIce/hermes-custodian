@@ -17,11 +17,10 @@ class StorageTests(unittest.TestCase):
 
     def test_failed_atomic_replace_preserves_previous_settings_and_removes_temp(self):
         self.store.save_settings({'value': 'old'})
-        replace = ('custodian._platform.windows._Win.replace' if os.name == 'nt'
-                   else 'custodian.storage.os.replace')
-        with patch(replace, side_effect=OSError('synthetic failure')):
+        with patch('custodian.storage.os.replace', side_effect=OSError('synthetic failure')) as replace:
             with self.assertRaises(OSError):
                 self.store.save_settings({'value': 'new'})
+        replace.assert_called_once()
         self.assertEqual(self.store.settings(), {'value': 'old'})
         self.assertEqual(list(self.store.root.glob('.settings-*')), [])
         self.assertEqual(list(self.store.root.glob('.custodian-*')), [])

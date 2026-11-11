@@ -951,7 +951,7 @@ def interprocess_lock(path: Path, timeout: float):
         deadline = time.monotonic() + max(0.0, float(timeout))
         while not try_lock_exclusive(fd):
             if time.monotonic() >= deadline:
-                raise TimeoutError('Timed out waiting for lock')
+                raise TimeoutError(f'Operation in progress for {path}; gave up after {timeout:g}s')
             time.sleep(0.05)
         try:
             yield

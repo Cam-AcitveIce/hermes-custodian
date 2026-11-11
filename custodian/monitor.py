@@ -34,8 +34,10 @@ def run_monitor(engine, state_dir: Path, once=False, stop_event=None):
             if os.path.exists(name):
                 os.unlink(name)
 
+    acquired = False
     try:
-        if not _platform.try_lock_exclusive(lock_fd):
+        acquired = _platform.try_lock_exclusive(lock_fd)
+        if not acquired:
             raise RuntimeError('A monitor is already running for this state directory')
         if threading.current_thread() is threading.main_thread():
             for sig in _platform.terminate_signals():
@@ -69,5 +71,8 @@ def run_monitor(engine, state_dir: Path, once=False, stop_event=None):
     finally:
         for sig, previous in previous_signals.items():
             signal.signal(sig, previous)
-        _platform.unlock(lock_fd)
-        os.close(lock_fd)
+        try:
+            if acquired:
+                _platform.unlock(lock_fd)
+        finally:
+            os.close(lock_fd)
