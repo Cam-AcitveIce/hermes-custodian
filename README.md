@@ -1,6 +1,17 @@
 # Hermes Custodian
 
-A local security-posture custodian for Hermes on Linux, macOS and native Windows. A deterministic engine records scoped findings and changes; Hermes agents can inspect those records through four tools, and users see what needs attention in the terminal or web dashboard. AI tools cannot grant themselves new authority.
+**Ask your Hermes agent: "what needs attention on this machine?" and get an answer backed by evidence.**
+
+Hermes Custodian is a quiet watcher for the device your agent lives on. It remembers what your files and permissions looked like, notices when something changes, and shows you exactly what needs a look: in the terminal, in a local dashboard, or straight from your agent.
+
+- **Your agent can check its own home.** Four read-only tools (`custodian_status`, `custodian_findings`, `custodian_changes`, `custodian_scan`) work on Linux, macOS and native Windows.
+- **Every finding shows its evidence.** The path, what's wrong, when it was seen and what to do next. No vague scores, no black box.
+- **It tells you what changed.** A persistent baseline turns "something is different" into a dated list.
+- **You choose the scope.** Nothing is watched until you approve it in a first-run setup, and credential files, memory and chat history are never opened.
+- **It admits its blind spots.** If a scan is incomplete or the store is unreadable, it says so instead of showing an empty, calm screen.
+- **Private by design.** The dashboard runs on your machine only, behind a login. No telemetry, no cloud, no self-updater, and the AI can't give itself more power.
+
+Setup is a guided first run. See [Installation and setup](#installation-and-setup).
 
 Status: release candidate. The automated suite passes on GitHub-hosted Linux, macOS and Windows runners with Python 3.11, 3.12, 3.13 and 3.14, including native Windows plugin-tool and dashboard/discovery workflows. A hands-on installation on a user's Windows machine remains recommended. No antivirus, exploit detection or tamper-proof sandbox claim.
 
