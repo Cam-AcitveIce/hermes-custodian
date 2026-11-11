@@ -1,0 +1,17 @@
+.venv/
+.hermes/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+*.sqlite*
+*.db
+.env
+coverage.xml
+.coverage
+docs/handoffs/
+docs/WORKSTREAMS.md
+scripts/demo_dashboard.py
+.github/
