@@ -2,7 +2,23 @@
 
 A local security-posture custodian for Hermes on Linux, macOS and native Windows. A deterministic engine records scoped findings and changes; Hermes agents can inspect those records through four tools, and users see what needs attention in the terminal or web dashboard. AI tools cannot grant themselves new authority.
 
-Status: release candidate. The automated suite passes on GitHub-hosted Linux, macOS and Windows runners with Python 3.11 and 3.14, including native Windows plugin-tool and dashboard/discovery workflows. A hands-on installation on a user's Windows machine remains recommended. No antivirus, exploit detection or tamper-proof sandbox claim.
+Status: release candidate. The automated suite passes on GitHub-hosted Linux, macOS and Windows runners with Python 3.11, 3.12, 3.13 and 3.14, including native Windows plugin-tool and dashboard/discovery workflows. A hands-on installation on a user's Windows machine remains recommended. No antivirus, exploit detection or tamper-proof sandbox claim.
+
+## Screenshots
+
+Captured from the installed package using synthetic fixture data only (paths aliased to `/demo`); nothing here comes from a real machine.
+
+**Overview**: what needs attention, coverage and monitor state.
+
+![Overview: what needs attention, coverage and monitor state](docs/screenshots/overview.png)
+
+**Findings**: evidence, severity and timestamps for each open finding.
+
+![Findings list with evidence and severity](docs/screenshots/findings.png)
+
+**Changes**: what changed since the previous scan.
+
+![Changes since the previous scan](docs/screenshots/changes.png)
 
 ## Interfaces
 
