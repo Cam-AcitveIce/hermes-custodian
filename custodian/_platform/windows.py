@@ -253,7 +253,10 @@ class _Win:
         return handle
 
     def _relative(self, parent, name, mode, disposition=1, write=False, private=False):
-        _component(name)
+        if mode != 'security':
+            _component(name)
+        elif name != '':
+            raise ValueError('Security reopen must use the retained object')
         _api()
         n = ctypes.WinDLL('ntdll')
         V, D = ctypes.c_void_p, ctypes.c_uint32
@@ -276,6 +279,8 @@ class _Win:
             access |= 1
         if mode in ('read', 'file'):
             access |= 1
+        if mode == 'security':
+            access |= 0x60000  # READ_CONTROL | WRITE_DAC on this retained object
         if write:
             access |= 2 | 4
         if mode == 'atomic':
@@ -384,7 +389,21 @@ class _Win:
         value = Rename()
         value.ReplaceIfExists, value.RootDirectory, value.FileNameLength = 1, parent, len(encoded)
         ctypes.memmove(ctypes.addressof(value) + Rename.FileName.offset, encoded, len(encoded))
-        self._set_information(handle, 3, value)
+        # Use the native API for a handle-relative rename. The Win32 wrapper
+        # interprets names before issuing the NT call and rejects this form on
+        # native runners (ERROR_INVALID_PARAMETER). FILE_RENAME_INFORMATION has
+        # the same aligned BOOLEAN/HANDLE/ULONG/WCHAR layout used above.
+        n = ctypes.WinDLL('ntdll')
+        n.NtSetInformationFile.restype = ctypes.c_int32
+        n.NtSetInformationFile.argtypes = [ctypes.c_void_p, ctypes.POINTER(_IoStatusBlock),
+                                          ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int]
+        n.RtlNtStatusToDosError.restype = ctypes.c_uint32
+        n.RtlNtStatusToDosError.argtypes = [ctypes.c_int32]
+        ios = _IoStatusBlock()
+        status = n.NtSetInformationFile(handle, ctypes.byref(ios), ctypes.byref(value),
+                                        ctypes.sizeof(value), 10)  # FileRenameInformation
+        if status < 0:
+            raise ctypes.WinError(n.RtlNtStatusToDosError(status))
 
     def discard(self, handle):
         self._set_information(handle, 4, ctypes.c_ubyte(1))
@@ -551,13 +570,11 @@ class _Win:
                     raise _last_error()
             finally:
                 k.LocalFree(sid)
-        # ReOpenFile upgrades rights on the same object, never by its current name.
-        # READ_CONTROL is needed when protecting/reading back the security descriptor.
-        k.ReOpenFile.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32]
-        k.ReOpenFile.restype = ctypes.c_void_p
-        writable = k.ReOpenFile(handle, 0x60000, 7, 0x02000000 | _FILE_FLAG_OPEN_REPARSE_POINT)
-        if writable is None or writable == ctypes.c_void_p(-1).value:
-            raise _last_error()
+        # ReOpenFile's Win32 reopen path fails for native directory handles.
+        # An empty NT name reopens RootDirectory itself, preserving object identity
+        # without resolving a mutable pathname. Do not request file data rights or
+        # FILE_NON_DIRECTORY_FILE: this operation supports directories and files.
+        writable = self._relative(handle, '', 'security')
         a.SetSecurityInfo.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32,
                                       ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
         a.SetSecurityInfo.restype = ctypes.c_uint32

@@ -248,7 +248,10 @@ def test_default_state_dir(monkeypatch, tmp_path):
 
     # 2. Linux XDG_STATE_HOME
     monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'xdg'))
+    # The facade reexports this function; its globals belong to the backend.
+    assert posix.default_state_dir.__module__ == posix.__name__
     monkeypatch.setattr(posix, 'NAME', 'linux')
+    monkeypatch.setattr(posix.sys, 'platform', 'linux')
     assert posix.default_state_dir() == tmp_path / 'xdg' / 'hermes-custodian'
 
     monkeypatch.delenv('XDG_STATE_HOME', raising=False)

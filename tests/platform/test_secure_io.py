@@ -335,3 +335,131 @@ def test_set_information_marshals_scalar_and_structure_buffers(monkeypatch):
     record = Record(123)
     win._set_information(42, 3, record)
     assert seen[-1] == (42, 3, bytes(record))
+
+
+def test_native_security_reopen_and_relative_rename_abi(monkeypatch):
+    """Exercise raw adapter calls on Linux, rather than hiding them behind FakeWin."""
+    import ctypes
+    from types import SimpleNamespace
+    calls = []
+
+    class Function:
+        def __init__(self, call):
+            self.call = call
+        def __call__(self, *args):
+            return self.call(*args)
+
+    def create(out, access, attrs, ios, allocation, attributes, share, disposition,
+               options, ea, ea_size):
+        obj = ctypes.cast(attrs, ctypes.POINTER(windows._ObjectAttributes)).contents
+        name = obj.ObjectName.contents
+        calls.append(('open', obj.RootDirectory, name.Length, access, options))
+        ctypes.cast(out, ctypes.POINTER(ctypes.c_void_p))[0] = 43
+        assert access & 0x60000 == 0x60000
+        assert not access & 3  # no directory list/file data rights needed
+        assert not options & 0x40  # FILE_NON_DIRECTORY_FILE would reject directories
+        return 0
+
+    def rename(handle, ios, pointer, size, kind):
+        raw = ctypes.string_at(pointer, size)
+        # ABI offsets on both pointer widths, with a WCHAR (not Linux wchar_t).
+        root_offset = 8 if ctypes.sizeof(ctypes.c_void_p) == 8 else 4
+        root = int.from_bytes(raw[root_offset:root_offset + ctypes.sizeof(ctypes.c_void_p)], 'little')
+        length_offset = root_offset + ctypes.sizeof(ctypes.c_void_p)
+        length = int.from_bytes(raw[length_offset:length_offset + 4], 'little')
+        name = raw[length_offset + 4:length_offset + 4 + length].decode('utf-16-le')
+        calls.append(('rename', handle, root, kind, name))
+        assert raw[0] == 1 and root == 42 and kind == 10
+        assert name == 'key-\U0001f512'
+        return 0
+
+    native = SimpleNamespace(NtCreateFile=Function(create), NtSetInformationFile=Function(rename),
+                             RtlNtStatusToDosError=Function(lambda status: 87))
+    monkeypatch.setattr(ctypes, 'WinDLL', lambda *args: native, raising=False)
+    monkeypatch.setattr(windows, '_api', lambda: (None, None))
+    win = windows._Win()
+    assert win._relative(42, '', 'security') == 43
+    win.replace(43, 42, 'key-\U0001f512')
+    assert calls[0][:3] == ('open', 42, 0)
+    assert calls[1] == ('rename', 43, 42, 10, 'key-\U0001f512')
+    with pytest.raises(ValueError):
+        win._relative(42, '', 'pin')
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='requires native Win32 handles and ACLs')
+def test_native_windows_fixture_acl_diagnostics(tmp_path):
+    """Bounded fixture-only context survives CI's --tb=short; never inspect user files."""
+    win = windows._Win()
+    fixture = tmp_path / 'acl-diagnostic'
+    fixture.mkdir()
+    report = {}
+    step = 'effective SID'
+    try:
+        me = win.current_user_sid()
+        report['effective_sid'] = me
+        step = 'new directory owner/DACL'
+        security = win.get_dacl_entries(str(fixture))
+        report['before'] = security
+        report['before_classification'] = windows.classify_dacl(security['owner'], security['dacl'], (me,))
+        with windows.open_directory_nofollow(fixture) as directory:
+            step = 'retained directory type'
+            assert win.info(directory.handle).is_dir
+            step = 'security handle reopen (READ_CONTROL | WRITE_DAC)'
+            writable = win._relative(directory.handle, '', 'security')
+            win.close(writable)
+            step = 'set protected DACL and read back'
+            windows._restrict(win, directory.handle, True, me)
+            security = win.get_dacl_entries(directory.handle)
+            report['after'] = security
+            report['after_classification'] = windows.classify_dacl(security['owner'], security['dacl'], (me,))
+            assert report['after_classification']['level'] == 'private'
+            assert {entry['sid'] for entry in security['dacl']} == {me, windows.SID_SYSTEM}
+            assert all(not entry['inherit_only'] and not entry['inherited'] for entry in security['dacl'])
+    except Exception as exc:
+        chain = []
+        current = exc
+        for _ in range(4):
+            if current is None:
+                break
+            chain.append({'type': type(current).__name__, 'winerror': getattr(current, 'winerror', None)})
+            current = current.__cause__ or current.__context__
+        pytest.fail(f'fixture ACL step={step}; errors={chain}; security={report}', pytrace=True)
+
+
+def test_set_private_dacl_uses_security_handle_and_directory_inheritance(monkeypatch):
+    import ctypes
+    from types import SimpleNamespace
+    events = []
+
+    class Function:
+        def __init__(self, call):
+            self.call = call
+        def __call__(self, *args):
+            return self.call(*args)
+
+    def sid(text, pointer):
+        ctypes.cast(pointer, ctypes.POINTER(ctypes.c_void_p))[0] = 99
+        return 1
+
+    def set_security(handle, kind, wanted, owner, group, acl, sacl):
+        events.append(('set', handle, wanted))
+        return 0
+
+    kernel = SimpleNamespace(LocalFree=Function(lambda pointer: None),
+                             CloseHandle=Function(lambda handle: events.append(('close', handle))))
+    advapi = SimpleNamespace(InitializeAcl=Function(lambda *args: 1),
+                             ConvertStringSidToSidW=Function(sid),
+                             AddAccessAllowedAceEx=Function(lambda acl, revision, flags, mask, sid:
+                                 events.append(('ace', flags, mask)) or 1),
+                             SetSecurityInfo=Function(set_security))
+    monkeypatch.setattr(windows, '_api', lambda: (kernel, advapi))
+    win = windows._Win()
+    def relative(parent, name, mode):
+        assert (parent, name, mode) == (42, '', 'security')
+        return 43
+    monkeypatch.setattr(win, '_relative', relative)
+    for directory, flags in ((True, 3), (False, 0)):
+        events.clear()
+        win.set_private_dacl(42, directory, 'S-1-5-21-123')
+        assert events == [('ace', flags, windows.FILE_ALL_ACCESS)] * 2 + [
+            ('set', 43, 0x80000004), ('close', 43)]
