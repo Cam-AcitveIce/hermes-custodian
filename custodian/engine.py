@@ -11,6 +11,16 @@ import time
 import math
 
 from .storage import Storage
+from . import _platform
+
+
+def _is_excluded(candidates, patterns):
+    """Use the walker's platform semantics for persisted finding coverage."""
+    if _platform.NAME == 'windows':
+        from ._platform.windows import is_excluded
+        return is_excluded(candidates, patterns)
+    return any(fnmatchcase(candidate, pattern)
+               for candidate in candidates for pattern in patterns)
 
 
 class Engine:
@@ -92,8 +102,7 @@ class Engine:
                 current = path
                 while current != root:
                     rel = str(current.relative_to(root))
-                    if any(fnmatchcase(rel, pat) or fnmatchcase(str(current), pat)
-                           or fnmatchcase(current.name, pat) for pat in exclusions):
+                    if _is_excluded((rel, str(current), current.name), exclusions):
                         return False
                     current = current.parent
                 return True
@@ -131,7 +140,6 @@ class Engine:
                 files[item['path']] = item
         findings = []
         for raw_path, item in sorted(files.items()):
-            mode = item['mode'] & 0o777
             if not policy.is_sensitive(Path(raw_path)):
                 continue
             path = policy.sanitise_text(raw_path)
@@ -143,14 +151,20 @@ class Engine:
                                  'recommendation': 'Inspect the symlink target manually; link mode does not control target permissions.',
                                  'first_seen': started, 'last_seen': started, 'status': 'open',
                                  'scope_signature': signature})
-            elif mode & 0o077:
-                findings.append({'id': hashlib.sha256(('sensitive_permissions:' + raw_path).encode()).hexdigest(),
-                                 'severity': 'high',
-                                 'title': 'sensitive-path file has group/other permission bits set',
-                                 'path': path, 'evidence': {'mode': oct(mode)},
-                                 'recommendation': 'Review ownership and restrict permissions manually.',
-                                 'first_seen': started, 'last_seen': started, 'status': 'open',
-                                 'scope_signature': signature})
+            else:
+                exposure = _platform.access_exposure(item)
+                if exposure:
+                    title = 'sensitive-path file is accessible beyond its owner' if _platform.NAME == 'windows' else 'sensitive-path file has group/other permission bits set'
+                    evidence = {'mode': oct(exposure['mode'])}
+                    if 'exposed_to' in exposure:
+                        evidence['exposed_to'] = exposure['exposed_to']
+                    findings.append({'id': hashlib.sha256(('sensitive_permissions:' + raw_path).encode()).hexdigest(),
+                                     'severity': exposure.get('severity', 'high'),
+                                     'title': title,
+                                     'path': path, 'evidence': evidence,
+                                     'recommendation': 'Review ownership and restrict permissions manually.',
+                                     'first_seen': started, 'last_seen': started, 'status': 'open',
+                                     'scope_signature': signature})
         changes = []
         if baseline is not None:
             for path, item in sorted(files.items()):
@@ -221,11 +235,7 @@ class Engine:
             if not -5 <= time.time() - heartbeat <= 30:
                 result['state'] = 'stale'
                 return result
-            try:
-                owned = Path(f'/proc/{pid}').stat().st_uid == os.getuid()
-                os.kill(pid, 0)
-            except (OSError, OverflowError):
-                owned = False
+            owned = _platform.process_is_running_as_current_user(pid)
             result['state'] = 'running' if owned else 'unavailable'
             return result
         except (OSError, ValueError, TypeError, UnicodeError):

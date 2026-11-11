@@ -13,15 +13,36 @@ def register(ctx):
         def handler(args, _name=name, **kwargs):
             try:
                 if args:
-                    return json.dumps({'ok': False, 'error': 'This tool takes no arguments; change scope through trusted setup.'})
+                    return json.dumps({'ok': False, 'status': 'error', 'error': 'This tool takes no arguments; change scope through trusted setup.'})
                 from hermes_constants import get_hermes_home
                 state_dir = get_hermes_home() / 'plugin-data' / 'hermes-custodian'
+                try:
+                    try:
+                        from .custodian.engine import Engine
+                    except ImportError:
+                        from custodian.engine import Engine
+                    engine = Engine(state_dir)
+                except (ImportError, AttributeError, OSError, TypeError) as exc:
+                    try:
+                        try:
+                            from .custodian import _platform
+                        except ImportError:
+                            from custodian import _platform
+                        if _platform.NAME == 'windows' and not _platform.BACKEND_READY:
+                            return json.dumps({
+                                "ok": False,
+                                "status": "unsupported",
+                                "platform": "windows",
+                                "reason": "Custodian Windows backend is not yet available.",
+                                "tool": _name,
+                            })
+                    except Exception:
+                        pass
+                    raise
                 if not (state_dir / 'settings.json').is_file():
                     return json.dumps({'ok': False, 'error': 'Not configured for this profile. Run custodian setup from this profile environment first.'})
-                from .custodian.engine import Engine
-                engine = Engine(state_dir)
                 method = {'custodian_status': 'status', 'custodian_findings': 'findings', 'custodian_changes': 'events', 'custodian_scan': 'scan'}[_name]
-                return json.dumps({'ok': True, 'data': getattr(engine, method)()}, ensure_ascii=True)
+                return json.dumps({'ok': True, 'status': 'ok', 'data': getattr(engine, method)()}, ensure_ascii=True)
             except Exception as exc:
                 return json.dumps({'ok': False, 'error': type(exc).__name__ + ': custodian operation failed; inspect local diagnostics.'})
         ctx.register_tool(name=name, toolset='custodian', schema={'name': name, 'description': description, 'parameters': {'type': 'object', 'properties': {}, 'additionalProperties': False}}, handler=handler)

@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Any, Callable, TextIO
 from urllib.parse import parse_qs, urlsplit
 
+from . import _platform
+
 ALLOWED_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 SESSION_COOKIE_NAME = "custodian_session"
 CSP_HEADER_VALUE = (
@@ -94,6 +96,43 @@ _STATIC_ASSETS: dict[str, tuple[str, str]] = {
     "/styles.css": ("styles.css", "text/css; charset=utf-8"),
     "/app.js": ("app.js", "application/javascript; charset=utf-8"),
 }
+
+
+def _secure_operation(name):
+    operation = getattr(_platform, name, None)
+    if not callable(operation):
+        raise OSError(f"Required secure platform operation unavailable: {name}")
+    return operation
+
+
+def _read_static_asset(path):
+    """Bounded regular-file read; Windows seam must pin all ancestors.
+
+    read_file_nofollow(path, max_bytes=) must reject reparse points in every
+    component and oversized/nonregular files before any content read.
+    """
+    limit = 1048576
+    if _platform.IS_WINDOWS:
+        body = _secure_operation('read_file_nofollow')(path, max_bytes=limit)
+    else:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+                raise ValueError("Invalid static asset")
+            chunks, remaining = [], limit + 1
+            while remaining:
+                chunk = os.read(fd, min(65536, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            body = b''.join(chunks)
+        finally:
+            os.close(fd)
+    if len(body) > limit:
+        raise ValueError("Invalid static asset")
+    return body
 
 
 def _resolve_static_dir(
@@ -556,21 +595,29 @@ class CustodianDashboardServer(ThreadingHTTPServer):
         self._load_or_create_key_and_epoch()
 
     def _read_key_record_unlocked(self) -> tuple[bytes, str]:
-        fd = os.open(
-            self.session_key_path,
-            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
-        )
-        with os.fdopen(fd, "r", encoding="utf-8") as stream:
-            info = os.fstat(stream.fileno())
-            if (
-                not stat.S_ISREG(info.st_mode)
-                or info.st_uid != os.getuid()
-                or info.st_nlink != 1
-                or (info.st_mode & 0o077) != 0
-                or info.st_size > 4096
-            ):
-                raise ValueError("Invalid dashboard session key file permissions or link count")
-            record = json.loads(stream.read(4097))
+        if _platform.IS_WINDOWS:
+            # Unlike mode bits, the seam must verify the opened handle's DACL,
+            # owner, regular type, single link and pinned ancestor chain.
+            raw = _secure_operation('read_private_file')(self.session_key_path, max_bytes=4096)
+            if len(raw) > 4096:
+                raise ValueError("Invalid dashboard session key size")
+            record = json.loads(raw)
+        else:
+            fd = os.open(
+                self.session_key_path,
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+            )
+            with os.fdopen(fd, "r", encoding="utf-8") as stream:
+                info = os.fstat(stream.fileno())
+                if (
+                    not stat.S_ISREG(info.st_mode)
+                    or info.st_uid != os.getuid()
+                    or info.st_nlink != 1
+                    or (info.st_mode & 0o077) != 0
+                    or info.st_size > 4096
+                ):
+                    raise ValueError("Invalid dashboard session key file permissions or link count")
+                record = json.loads(stream.read(4097))
         if not isinstance(record, dict) or record.get("schema_version") != 1:
             raise ValueError("Unsupported session key schema")
         key_hex = record.get("signing_key")
@@ -590,6 +637,12 @@ class CustodianDashboardServer(ThreadingHTTPServer):
             separators=(",", ":"),
             sort_keys=True,
         ).encode("utf-8")
+        if _platform.IS_WINDOWS:
+            # Must atomically replace within pinned private state, with verified
+            # private ACLs before bytes are written; reject unsafe destinations.
+            _secure_operation('atomic_write_private_file')(self.session_key_path, record_bytes)
+            _platform.fsync_directory(self.state_dir)
+            return
         flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC
         try:
             fd = os.open(self.session_key_path, flags, 0o600)
@@ -615,11 +668,7 @@ class CustodianDashboardServer(ThreadingHTTPServer):
             finally:
                 if os.path.exists(tmp_path):
                     os.unlink(tmp_path)
-        dir_fd = os.open(self.state_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
+        _platform.fsync_directory(self.state_dir)
 
     def _load_or_create_key_and_epoch(self) -> tuple[bytes, str]:
         with self._lock:
@@ -628,6 +677,8 @@ class CustodianDashboardServer(ThreadingHTTPServer):
             except FileNotFoundError:
                 pass
             except (OSError, ValueError, TypeError):
+                if _platform.IS_WINDOWS:
+                    raise
                 try:
                     st = os.lstat(self.session_key_path)
                     if not stat.S_ISREG(st.st_mode):
@@ -767,6 +818,8 @@ class CustodianDashboardServer(ThreadingHTTPServer):
                 key_bytes, _ = self._read_key_record_unlocked()
                 key_hex = key_bytes.hex()
             except Exception:
+                if _platform.IS_WINDOWS:
+                    raise
                 key_hex = secrets.token_hex(32)
             new_epoch = secrets.token_hex(16)
             self._write_key_record_unlocked(key_hex, new_epoch)
@@ -1003,15 +1056,8 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
             static_dir = _resolve_static_dir()
             asset_path = static_dir / filename
             try:
-                fd = os.open(asset_path, os.O_RDONLY | os.O_NOFOLLOW)
-                try:
-                    st = os.fstat(fd)
-                    if not stat.S_ISREG(st.st_mode) or st.st_size > 1048576:
-                        raise ValueError("Invalid static asset")
-                    body = os.read(fd, st.st_size + 1)
-                finally:
-                    os.close(fd)
-            except OSError:
+                body = _read_static_asset(asset_path)
+            except (OSError, ValueError):
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
                 return
             self.send_response(HTTPStatus.OK)

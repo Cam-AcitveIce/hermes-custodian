@@ -5,10 +5,14 @@ import subprocess
 import hashlib
 import json
 import stat
-import fcntl
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
 import secrets
 from contextlib import contextmanager
 from pathlib import Path
+from custodian._platform import NAME
 
 
 _POLICY_NAME = '99hermes-custodian-security'
@@ -334,6 +338,8 @@ def _native_policy_query(argv: list[str]) -> str:
 
 def plan_security_updates(enabled: bool) -> dict:
     """Read-only native security-policy preview. Production paths are pinned."""
+    if NAME != 'linux':
+        return {'status': 'unsupported', 'changed': False, 'error': 'Security-update automation is Linux-only'}
     if type(enabled) is not bool:
         return {'status': 'invalid', 'changed': False, 'error': 'enabled must be a boolean'}
     return _SecurityPolicy(Path('/etc'), owner_uid=0, query=_native_policy_query).plan(enabled)
@@ -346,6 +352,8 @@ def apply_security_update_policy(plan: dict, approval: str) -> dict:
     execute from a separately trusted root-owned installation, not a user venv.
     No sudo invocation, packages, shell, or model runtime is involved here.
     """
+    if NAME != 'linux':
+        return {'status': 'unsupported', 'changed': False, 'error': 'Security-update automation is Linux-only'}
     if os.geteuid() != 0 or os.getuid() != 0:
         return {'status': 'denied', 'changed': False, 'error': 'Requires a real root administrator CLI; no privilege escalation is provided'}
     return _SecurityPolicy(Path('/etc'), owner_uid=0, query=_native_policy_query).apply(plan, approval)
@@ -374,6 +382,8 @@ def configure_security_updates(enabled: bool, *, trusted_cli: bool = False,
     With plan and approval, verifies plan['enabled'] matches enabled and delegates to
     apply_security_update_policy(plan, approval) (which requires real and effective root).
     """
+    if NAME != 'linux':
+        return {'status': 'unsupported', 'changed': False, 'error': 'Security-update automation is Linux-only'}
     if type(enabled) is not bool:
         return {'status': 'invalid', 'changed': False, 'enabled': None, 'error': 'enabled must be a boolean'}
     if not trusted_cli:
@@ -387,12 +397,7 @@ def configure_security_updates(enabled: bool, *, trusted_cli: bool = False,
     return apply_security_update_policy(plan, approval)
 
 
-def check_updates() -> dict:
-    """List cached upgrades. Security=True only for recognized security suites.
-
-    Other origins are unknown, not asserted non-security. Cache age and origin
-    authenticity are not established by this read-only operation.
-    """
+def _check_updates_linux() -> dict:
     try:
         child = subprocess.run(['apt', 'list', '--upgradable'], capture_output=True,
                                text=True, timeout=30, check=False,
@@ -428,3 +433,150 @@ def check_updates() -> dict:
             'security_count': sum(p['security'] is True for p in packages),
             'security_unknown_count': sum(p['security'] is None for p in packages),
             'security_basis': 'recognized repository suite name, not origin authentication'}
+
+
+def _check_updates_macos() -> dict:
+    try:
+        child = subprocess.run(['softwareupdate', '-l'], capture_output=True,
+                               text=True, timeout=60, check=False,
+                               env={**os.environ, 'LC_ALL': 'C', 'LANG': 'C'})
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {'status': 'unavailable', 'backend': 'softwareupdate', 'cache_only': True,
+                'cache_freshness': 'unknown', 'error': str(exc), 'packages': [],
+                'upgradable_count': None, 'security_count': None, 'security_unknown_count': None}
+    if child.returncode != 0:
+        return {'status': 'unavailable', 'backend': 'softwareupdate', 'cache_only': True,
+                'cache_freshness': 'unknown', 'error': child.stderr.strip() or 'softwareupdate exited unsuccessfully',
+                'returncode': child.returncode, 'packages': [],
+                'upgradable_count': None, 'security_count': None, 'security_unknown_count': None}
+
+    import platform
+    arch = platform.machine()
+    packages = []
+    current = None
+    for raw_line in child.stdout.splitlines():
+        line = raw_line.strip()
+        if line.startswith('* Label:'):
+            if current:
+                packages.append(current)
+            label = line.split('* Label:', 1)[1].strip()
+            current = {'name': label, 'candidate_version': 'unknown',
+                       'installed_version': None, 'architecture': arch,
+                       'suites': ['softwareupdate'], 'security': None}
+        elif current is not None:
+            version_m = re.search(r'Version:\s*([^,\s]+)', line)
+            if version_m:
+                current['candidate_version'] = version_m.group(1).strip()
+    if current:
+        packages.append(current)
+
+    return {'status': 'ok', 'backend': 'softwareupdate', 'cache_only': True,
+            'cache_freshness': 'unknown', 'packages': packages,
+            'upgradable_count': len(packages),
+            'security_count': 0,
+            'security_unknown_count': len(packages),
+            'security_basis': 'recognized repository suite name, not origin authentication'}
+
+
+_WIN_UPDATE_SCRIPT = (
+    "$session = New-Object -ComObject Microsoft.Update.Session; "
+    "$searcher = $session.CreateUpdateSearcher(); "
+    "$result = $searcher.Search('IsInstalled=0 and IsHidden=0'); "
+    "$updates = @(); "
+    "foreach ($u in $result.Updates) { "
+    "  $kbs = @(); foreach ($k in $u.KBArticleIDs) { $kbs += $k }; "
+    "  $cats = @(); foreach ($c in $u.Categories) { $cats += $c.Name }; "
+    "  $updates += [PSCustomObject]@{ "
+    "    Title = $u.Title; "
+    "    KB = ($kbs -join ','); "
+    "    Categories = $cats; "
+    "    MsrcSeverity = $u.MsrcSeverity; "
+    "  } "
+    "}; "
+    "ConvertTo-Json -Compress -InputObject @($updates)"
+)
+
+
+def _check_updates_windows() -> dict:
+    try:
+        child = subprocess.run([
+            'powershell.exe', '-NoProfile', '-NonInteractive',
+            '-ExecutionPolicy', 'Bypass', '-Command', _WIN_UPDATE_SCRIPT
+        ], capture_output=True, text=True, timeout=90, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {'status': 'unavailable', 'backend': 'windowsupdate', 'cache_only': True,
+                'cache_freshness': 'unknown', 'error': str(exc), 'packages': [],
+                'upgradable_count': None, 'security_count': None, 'security_unknown_count': None}
+    if child.returncode != 0:
+        return {'status': 'unavailable', 'backend': 'windowsupdate', 'cache_only': True,
+                'cache_freshness': 'unknown', 'error': child.stderr.strip() or 'PowerShell exited unsuccessfully',
+                'returncode': child.returncode, 'packages': [],
+                'upgradable_count': None, 'security_count': None, 'security_unknown_count': None}
+
+    stdout = child.stdout.strip()
+    if not stdout:
+        raw_items = []
+    else:
+        try:
+            data = json.loads(stdout)
+            if isinstance(data, dict):
+                raw_items = [data]
+            elif isinstance(data, list):
+                raw_items = data
+            else:
+                raw_items = []
+        except (json.JSONDecodeError, ValueError) as exc:
+            return {'status': 'unavailable', 'backend': 'windowsupdate', 'cache_only': True,
+                    'cache_freshness': 'unknown', 'error': f'Invalid JSON from PowerShell: {exc}',
+                    'packages': [], 'upgradable_count': None, 'security_count': None, 'security_unknown_count': None}
+
+    import platform
+    arch = platform.machine()
+    packages = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        title = item.get('Title') or 'unknown'
+        kb = item.get('KB') or ''
+        categories = item.get('Categories') or []
+        if isinstance(categories, str):
+            categories = [categories]
+        severity = item.get('MsrcSeverity')
+
+        is_security = ('Security Updates' in categories) or bool(severity and str(severity).strip())
+        security = True if is_security else None
+        candidate_version = kb if kb else title
+
+        packages.append({
+            'name': title,
+            'candidate_version': candidate_version,
+            'installed_version': None,
+            'architecture': arch,
+            'suites': categories,
+            'security': security,
+        })
+
+    return {
+        'status': 'ok',
+        'backend': 'windowsupdate',
+        'cache_only': True,
+        'cache_freshness': 'unknown',
+        'packages': packages,
+        'upgradable_count': len(packages),
+        'security_count': sum(p['security'] is True for p in packages),
+        'security_unknown_count': sum(p['security'] is None for p in packages),
+        'security_basis': 'Category or MsrcSeverity',
+    }
+
+
+def check_updates() -> dict:
+    """List cached upgrades. Security=True only for recognized security suites.
+
+    Other origins are unknown, not asserted non-security. Cache age and origin
+    authenticity are not established by this read-only operation.
+    """
+    if NAME == 'macos':
+        return _check_updates_macos()
+    if NAME == 'windows':
+        return _check_updates_windows()
+    return _check_updates_linux()

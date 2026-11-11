@@ -8,10 +8,8 @@ import sys
 
 
 def default_state_dir():
-    profile = os.environ.get('HERMES_HOME')
-    if profile:
-        return Path(profile) / 'plugin-data' / 'hermes-custodian'
-    return Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'hermes-custodian'
+    from . import _platform
+    return _platform.default_state_dir()
 
 
 def _is_root_owned_install() -> bool:
@@ -105,7 +103,8 @@ def main(argv=None):
             if args.updates_action == 'security-plan':
                 result = updates.plan_security_updates(args.security_enabled)
             elif args.updates_action == 'security-apply':
-                if os.getuid() != 0 or os.geteuid() != 0:
+                from . import _platform
+                if _platform.current_principal() != '0' or getattr(os, 'geteuid', lambda: 1)() != 0:
                     result = {'status': 'denied', 'changed': False, 'error': 'Requires real and effective UID 0 (root)'}
                 elif not _is_root_owned_install():
                     result = {'status': 'denied', 'changed': False, 'error': 'Requires a root-owned, non-writable installation'}

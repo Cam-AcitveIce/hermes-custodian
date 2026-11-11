@@ -106,3 +106,12 @@ def test_configure_security_updates_wraps_plan_and_apply_for_trusted_cli(monkeyp
     applied = updates.configure_security_updates(True, trusted_cli=True, plan=fake_plan, approval='APPLY SECURITY POLICY ' + 'a' * 64)
     assert applied['status'] == 'applied'
     assert seen == [('plan', True), ('apply', fake_plan, 'APPLY SECURITY POLICY ' + 'a' * 64)]
+
+
+def test_import_updates_succeeds_on_win32_with_fcntl_blocked(monkeypatch):
+    import sys
+    monkeypatch.setattr(sys, 'platform', 'win32')
+    monkeypatch.setitem(sys.modules, 'fcntl', None)
+    monkeypatch.delitem(sys.modules, 'custodian.updates', raising=False)
+    import custodian.updates
+    assert custodian.updates is not None

@@ -159,12 +159,13 @@
       const isDegraded = String(anchorEvt.kind || "") === "scan_degraded";
       const isScan = anchorEvt.kind === "scan_completed" || anchorEvt.kind === "scan_degraded";
       const ts = String(anchorEvt.timestamp || anchorEvt.t || "");
-      const datePart = ts.replace("T", " ").slice(0, 19);
+      const tf = formatLocalTimestamp(ts);
+      const displayTime = tf.display !== "—" ? tf.display : (ts ? ts.replace("T", " ").slice(0, 19) : "recent");
       return {
         id: "scan-group-" + idx,
         title: isScan
-          ? ("Scan @ " + (datePart || "recent"))
-          : ("Change batch @ " + (datePart || "recent")),
+          ? ("Scan @ " + displayTime)
+          : ("Change batch @ " + displayTime),
         meta: isScan
           ? ((isDegraded ? "Degraded" : "Complete") + (anchorEvt.summary ? (" · " + anchorEvt.summary) : ""))
           : "Observed filesystem events",
@@ -237,18 +238,24 @@
     });
 
     const invApproved = Boolean(inv.discovery_approved);
+    const cleanList = function (arr) {
+      if (!Array.isArray(arr)) return [];
+      return arr.map(String).map(function (s) { return s.trim(); }).filter(function (s) {
+        return s.length > 0 && s.toLowerCase() !== "none" && s.toLowerCase() !== "(none listed)" && s.toLowerCase() !== "none listed";
+      });
+    };
     const rawProfiles = Array.isArray(inv.profiles) ? inv.profiles : [];
     const profiles = rawProfiles.map(function (p) {
-      const models = Array.isArray(p.models) ? p.models : (p.model ? [String(p.model)] : []);
-      const providers = Array.isArray(p.providers) ? p.providers : (p.provider ? [String(p.provider)] : []);
-      const plugins = Array.isArray(p.plugins) ? p.plugins.map(String) : [];
-      const mcpServers = Array.isArray(p.mcp_servers) ? p.mcp_servers.map(String) : [];
+      const models = cleanList(Array.isArray(p.models) ? p.models : (p.model ? [String(p.model)] : []));
+      const providers = cleanList(Array.isArray(p.providers) ? p.providers : (p.provider ? [String(p.provider)] : []));
+      const plugins = cleanList(Array.isArray(p.plugins) ? p.plugins : []);
+      const mcpServers = cleanList(Array.isArray(p.mcp_servers) ? p.mcp_servers : []);
       return {
         name: String(p.name || p.profile || "default"),
         path: String(p.path || "—"),
-        model: models.length ? models.join(", ") : "None listed",
+        model: models.length ? models.join(", ") : "no model recorded",
         models: models,
-        provider: providers.length ? providers.join(", ") : "None listed",
+        provider: providers.length ? providers.join(", ") : "",
         providers: providers,
         plugins: plugins,
         mcp_servers: mcpServers,
@@ -298,8 +305,11 @@
     if (openFindings.length > 0) {
       verdictCode = "NEEDS YOU";
       verdictClass = "is-needs-you";
-      const plural = openFindings.length === 1 ? "1 open finding" : (openFindings.length + " open findings");
-      verdictSentence = plural + " in watched paths need review from your terminal.";
+      if (openFindings.length === 1) {
+        verdictSentence = "1 open finding needs review from your terminal.";
+      } else {
+        verdictSentence = openFindings.length + " open findings need review from your terminal.";
+      }
       if (!isCovComplete || !monitoring) {
         verdictDetail = covReason || (monitoring ? "Scan coverage is incomplete." : "Monitor service is stopped.");
       } else {
@@ -319,7 +329,7 @@
       verdictClass = "is-quiet";
       verdictSentence = "Nothing needs you.";
       if (lastScan && lastScan.finished_at) {
-        const timePart = formatTimeShort(lastScan.finished_at);
+        const timePart = formatLocalTimestamp(lastScan.finished_at).display;
         verdictDetail = "Last scan finished at " + timePart + " within the " + maxFiles.toLocaleString() + "-file budget (" + filesChecked.toLocaleString() + " files checked).";
       } else {
         verdictDetail = "No open findings recorded within configured budget.";
@@ -377,6 +387,7 @@
       findings: findings,
       open_findings: openFindings,
       events: events,
+      data_errors: Array.isArray(snap.data_errors) ? snap.data_errors.map(String) : [],
       inventory: {
         configured: Boolean(inv.configured),
         discovery_approved: invApproved,
@@ -406,6 +417,8 @@
     formatTimeShort: formatTimeShort,
     formatIsoReadable: formatIsoReadable,
     formatTimestamp: formatTimestamp,
+    formatLocalTimestamp: formatLocalTimestamp,
+    capitaliseTitle: capitaliseTitle,
     flattenEvidencePairs: flattenEvidencePairs,
     formatEvidenceSummary: formatEvidenceSummary,
     groupEventsByScan: groupEventsByScan
@@ -491,7 +504,14 @@
 
     if (lastScanEl) {
       const ls = data.status && data.status.last_scan;
-      lastScanEl.textContent = ls && ls.finished_at ? formatTimeShort(ls.finished_at) : "—";
+      if (ls && ls.finished_at) {
+        const tf = formatLocalTimestamp(ls.finished_at);
+        lastScanEl.textContent = tf.display;
+        lastScanEl.title = tf.raw;
+      } else {
+        lastScanEl.textContent = "—";
+        lastScanEl.removeAttribute("title");
+      }
     }
 
     if (heartbeat) {
@@ -510,9 +530,14 @@
         const stoppedText = document.getElementById("stopped-banner-text");
         if (stoppedText) {
           const ls = data.status && data.status.last_scan;
-          stoppedText.textContent = ls && ls.finished_at
-            ? ("The local custodian monitor process is not running. Last scan was finished at " + formatIsoReadable(ls.finished_at) + "; file changes since then are not observed.")
-            : "The local custodian monitor process is not running. File changes are not currently observed.";
+          if (ls && ls.finished_at) {
+            const tf = formatLocalTimestamp(ls.finished_at);
+            stoppedText.textContent = "The local custodian monitor process is not running. Last scan was finished at " + tf.display + "; file changes since then are not observed.";
+            stoppedText.title = tf.raw;
+          } else {
+            stoppedText.textContent = "The local custodian monitor process is not running. File changes are not currently observed.";
+            stoppedText.removeAttribute("title");
+          }
         }
       } else {
         stoppedBanner.classList.add("is-hidden");
@@ -537,13 +562,26 @@
     }
     if (ts) {
       const ls = data.status && data.status.last_scan;
-      ts.textContent = ls && ls.finished_at ? ("Last scan " + formatIsoReadable(ls.finished_at)) : "Last scan —";
+      if (ls && ls.finished_at) {
+        const tf = formatLocalTimestamp(ls.finished_at);
+        ts.textContent = "Last scan " + tf.display;
+        ts.title = tf.raw;
+      } else {
+        ts.textContent = "Last scan —";
+        ts.removeAttribute("title");
+      }
     }
     if (sentence) {
       sentence.textContent = verdict.sentence;
     }
     if (detail) {
       detail.textContent = verdict.detail;
+      const ls = data.status && data.status.last_scan;
+      if (ls && ls.finished_at && verdict.code === "QUIET") {
+        detail.title = formatLocalTimestamp(ls.finished_at).raw;
+      } else {
+        detail.removeAttribute("title");
+      }
     }
 
     const openCountEl = document.getElementById("overview-open-count");
@@ -559,7 +597,14 @@
     const listEl = document.getElementById("overview-findings-list");
     clearChildren(listEl);
 
-    if (data.open_findings.length === 0) {
+    const hasFindingsError = data.data_errors && data.data_errors.indexOf("findings") !== -1;
+
+    if (hasFindingsError) {
+      const errRow = makeEl("div", "compact-empty-row compact-empty-row--error");
+      const msg = makeEl("span", "text-error", "Stored findings could not be read; the list may be incomplete");
+      errRow.appendChild(msg);
+      listEl.appendChild(errRow);
+    } else if (data.open_findings.length === 0) {
       const emptyRow = makeEl("div", "compact-empty-row");
       const msg = makeEl(
         "span",
@@ -589,11 +634,13 @@
         }
 
         const sev = makeEl("span", "sev-badge is-" + f.severity, f.severity.toUpperCase());
-        const title = makeEl("span", "finding-row-title", f.title);
-        const path = makeEl("span", "finding-row-path", truncateMiddle(f.path, 46));
+        const title = makeEl("span", "finding-row-title", capitaliseTitle(f.title));
+        const path = makeEl("span", "finding-row-path", truncateMiddle(f.path, 38));
         path.title = f.path;
         const ev = makeEl("span", "finding-row-evidence", formatEvidenceSummary(f.evidence));
-        const time = makeEl("span", "finding-row-time", formatTimeShort(f.last_seen));
+        const tf = formatLocalTimestamp(f.last_seen);
+        const time = makeEl("span", "finding-row-time", tf.display);
+        if (tf.raw) time.title = tf.raw;
 
         row.appendChild(sev);
         row.appendChild(title);
@@ -644,15 +691,32 @@
       if (!inv.discovery_approved) {
         profVal.textContent = "Consent required";
         profSub.textContent = "Profile discovery needs consent in terminal setup";
+        profSub.removeAttribute("title");
       } else if (inv.profiles.length === 0) {
         profVal.textContent = "0 profiles";
         profSub.textContent = "No profiles found in consented root";
+        profSub.removeAttribute("title");
       } else {
         profVal.textContent = inv.profiles.length + (inv.profiles.length === 1 ? " profile" : " profiles");
-        const summary = inv.profiles.map(function (p) {
-          return p.name + " (" + (p.model || "default") + ")";
+        clearChildren(profSub);
+        const fullSummary = inv.profiles.map(function (p) {
+          const mStr = p.models && p.models.length > 0 ? p.models.join(", ") : "no model recorded";
+          return p.name + " (" + mStr + ")";
         }).join(", ");
-        profSub.textContent = truncateMiddle(summary, 54);
+        profSub.title = fullSummary;
+        inv.profiles.forEach(function (p, idx) {
+          if (idx > 0) {
+            profSub.appendChild(document.createTextNode(", "));
+          }
+          profSub.appendChild(document.createTextNode(p.name + " ("));
+          if (p.models && p.models.length > 0) {
+            profSub.appendChild(document.createTextNode(p.models.join(", ")));
+          } else {
+            const mutedSpan = makeEl("span", "text-muted", "no model recorded");
+            profSub.appendChild(mutedSpan);
+          }
+          profSub.appendChild(document.createTextNode(")"));
+        });
       }
     }
 
@@ -727,6 +791,17 @@
     const tbody = document.getElementById("findings-tbody");
     clearChildren(tbody);
 
+    const hasFindingsError = data.data_errors && data.data_errors.indexOf("findings") !== -1;
+
+    if (hasFindingsError && filtered.length === 0) {
+      const tr = makeEl("tr");
+      const td = makeEl("td", "table-cell-error", "Stored findings could not be read; the list may be incomplete");
+      td.colSpan = 5;
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+      return;
+    }
+
     if (filtered.length === 0) {
       const tr = makeEl("tr");
       const td = makeEl("td", "", "No findings match the current filter criteria.");
@@ -740,7 +815,7 @@
       const tr = makeEl("tr", "table-row-interactive");
       tr.tabIndex = 0;
       tr.setAttribute("role", "button");
-      tr.setAttribute("aria-label", f.severity + " finding: " + f.title + " at " + f.path);
+      tr.setAttribute("aria-label", f.severity + " finding: " + capitaliseTitle(f.title) + " at " + f.path);
       if (state.selectedFindingId === f.id) {
         tr.classList.add("is-selected");
       }
@@ -748,14 +823,16 @@
       const tdSev = makeEl("td");
       tdSev.appendChild(makeEl("span", "sev-badge is-" + f.severity, f.severity.toUpperCase()));
 
-      const tdTitle = makeEl("td", "finding-row-title", f.title);
+      const tdTitle = makeEl("td", "finding-row-title", capitaliseTitle(f.title));
       const tdPath = makeEl("td", "mono", truncateMiddle(f.path, 52));
       tdPath.title = f.path;
 
       const tdStatus = makeEl("td");
       tdStatus.appendChild(makeEl("span", "status-pill is-" + f.status, f.status));
 
-      const tdLastSeen = makeEl("td", "mono", formatIsoReadable(f.last_seen));
+      const tf = formatLocalTimestamp(f.last_seen);
+      const tdLastSeen = makeEl("td", "mono", tf.display);
+      if (tf.raw) tdLastSeen.title = tf.raw;
 
       tr.appendChild(tdSev);
       tr.appendChild(tdTitle);
@@ -809,6 +886,14 @@
     const container = document.getElementById("changes-groups-container");
     clearChildren(container);
 
+    const hasEventsError = data.data_errors && data.data_errors.indexOf("events") !== -1;
+
+    if (hasEventsError && events.length === 0) {
+      const errDiv = makeEl("div", "compact-empty-row compact-empty-row--error", "Stored events could not be read; the list may be incomplete");
+      container.appendChild(errDiv);
+      return;
+    }
+
     if (events.length === 0) {
       const emptyDiv = makeEl("div", "compact-empty-row", "No timeline events recorded in the current scan window.");
       container.appendChild(emptyDiv);
@@ -825,7 +910,12 @@
 
       const groupEl = makeEl("div", "scan-group");
       const headerEl = makeEl("div", "scan-group-header");
-      headerEl.appendChild(makeEl("span", "scan-group-title", g.title));
+      const gTitle = makeEl("span", "scan-group-title", g.title);
+      if (g.timestamp) {
+        const tf = formatLocalTimestamp(g.timestamp);
+        if (tf.raw) gTitle.title = tf.raw;
+      }
+      headerEl.appendChild(gTitle);
       headerEl.appendChild(makeEl("span", "scan-group-meta", g.meta));
       groupEl.appendChild(headerEl);
 
@@ -838,7 +928,9 @@
         rowBtn.type = "button";
         rowBtn.setAttribute("aria-expanded", isExpanded ? "true" : "false");
 
-        const timeSpan = makeEl("span", "mono", formatTimeShort(ev.t));
+        const tf = formatLocalTimestamp(ev.t);
+        const timeSpan = makeEl("span", "mono", tf.display);
+        if (tf.raw) timeSpan.title = tf.raw;
         const isAlertKind = ev.kind === "finding_opened" || ev.kind === "permission_change" || ev.kind === "scan_degraded";
         const kindSpan = makeEl("span", "event-kind-tag" + (isAlertKind ? " is-alert" : ""), ev.kind);
         const pathSpan = makeEl("span", "mono", ev.path ? truncateMiddle(ev.path, 40) : "(scan engine)");
@@ -859,7 +951,9 @@
 
         if (isExpanded) {
           const detailBox = makeEl("div", "event-detail-box");
-          detailBox.appendChild(makeEl("span", "", "Timestamp: " + ev.t));
+          const timeP = makeEl("span", "", "Timestamp: " + tf.display);
+          if (tf.raw) timeP.title = tf.raw;
+          detailBox.appendChild(timeP);
           detailBox.appendChild(makeEl("span", "", "Kind: " + ev.kind));
           detailBox.appendChild(makeEl("span", "", "Path: " + (ev.path || "n/a")));
           detailBox.appendChild(makeEl("span", "", "Summary: " + ev.summary));
@@ -896,25 +990,68 @@
       const card = makeEl("div", "profile-card");
       const head = makeEl("div", "profile-card-head");
       head.appendChild(makeEl("h2", "profile-name", prof.name));
-      head.appendChild(makeEl("span", "mono-tag", prof.provider));
+      if (prof.providers && prof.providers.length > 0) {
+        head.appendChild(makeEl("span", "mono-tag", prof.providers.join(", ")));
+      } else {
+        const noProvTag = makeEl("span", "mono-tag text-muted", "no provider recorded");
+        head.appendChild(noProvTag);
+      }
       card.appendChild(head);
 
       const dl = makeEl("dl", "kv-list kv-list--compact");
 
-      const rows = [
-        ["Profile path", prof.path],
-        ["Model", prof.model],
-        ["Provider", prof.provider],
-        ["Plugins (" + prof.plugins.length + ")", prof.plugins.join(", ") || "none"],
-        ["MCP servers (" + prof.mcp_servers.length + ")", prof.mcp_servers.join(", ") || "none configured"]
-      ];
+      const rPath = makeEl("div", "kv-row");
+      rPath.appendChild(makeEl("dt", "", "Profile path"));
+      rPath.appendChild(makeEl("dd", "mono", prof.path));
+      dl.appendChild(rPath);
 
-      rows.forEach(function (pair) {
-        const r = makeEl("div", "kv-row");
-        r.appendChild(makeEl("dt", "", pair[0]));
-        r.appendChild(makeEl("dd", "mono", pair[1]));
-        dl.appendChild(r);
-      });
+      const rModel = makeEl("div", "kv-row");
+      rModel.appendChild(makeEl("dt", "", "Model"));
+      const ddModel = makeEl("dd", "mono");
+      if (prof.models && prof.models.length > 0) {
+        ddModel.textContent = prof.models.join(", ");
+      } else {
+        ddModel.textContent = "no model recorded";
+        ddModel.classList.add("text-muted");
+      }
+      rModel.appendChild(ddModel);
+      dl.appendChild(rModel);
+
+      const rProv = makeEl("div", "kv-row");
+      rProv.appendChild(makeEl("dt", "", "Provider"));
+      const ddProv = makeEl("dd", "mono");
+      if (prof.providers && prof.providers.length > 0) {
+        ddProv.textContent = prof.providers.join(", ");
+      } else {
+        ddProv.textContent = "no provider recorded";
+        ddProv.classList.add("text-muted");
+      }
+      rProv.appendChild(ddProv);
+      dl.appendChild(rProv);
+
+      const rPlug = makeEl("div", "kv-row");
+      rPlug.appendChild(makeEl("dt", "", "Plugins (" + prof.plugins.length + ")"));
+      const ddPlug = makeEl("dd", "mono");
+      if (prof.plugins && prof.plugins.length > 0) {
+        ddPlug.textContent = prof.plugins.join(", ");
+      } else {
+        ddPlug.textContent = "no plugins configured";
+        ddPlug.classList.add("text-muted");
+      }
+      rPlug.appendChild(ddPlug);
+      dl.appendChild(rPlug);
+
+      const rMcp = makeEl("div", "kv-row");
+      rMcp.appendChild(makeEl("dt", "", "MCP servers (" + prof.mcp_servers.length + ")"));
+      const ddMcp = makeEl("dd", "mono");
+      if (prof.mcp_servers && prof.mcp_servers.length > 0) {
+        ddMcp.textContent = prof.mcp_servers.join(", ");
+      } else {
+        ddMcp.textContent = "no servers configured";
+        ddMcp.classList.add("text-muted");
+      }
+      rMcp.appendChild(ddMcp);
+      dl.appendChild(rMcp);
 
       const matchingFindings = data.findings.filter(function (f) {
         return prof.path !== "—" && f.path.indexOf(prof.path) === 0;
@@ -985,7 +1122,9 @@
       watchedList.appendChild(makeEl("li", "", "No watched paths configured."));
     } else {
       watchedPaths.forEach(function (p) {
-        watchedList.appendChild(makeEl("li", "", p));
+        const item = makeEl("li", "", truncateMiddle(p, 42));
+        item.title = p;
+        watchedList.appendChild(item);
       });
     }
 
@@ -999,7 +1138,9 @@
       exclList.appendChild(makeEl("li", "", "No exclusion directory patterns configured."));
     } else {
       exclusions.forEach(function (ex) {
-        exclList.appendChild(makeEl("li", "", ex));
+        const item = makeEl("li", "", truncateMiddle(ex, 42));
+        item.title = ex;
+        exclList.appendChild(item);
       });
     }
   }
@@ -1026,7 +1167,14 @@
     }
     if (elLast) {
       const ls = data.status.last_scan;
-      elLast.textContent = ls && ls.finished_at ? formatIsoReadable(ls.finished_at) : "Never";
+      if (ls && ls.finished_at) {
+        const tf = formatLocalTimestamp(ls.finished_at);
+        elLast.textContent = tf.display;
+        elLast.title = tf.raw;
+      } else {
+        elLast.textContent = "Never";
+        elLast.removeAttribute("title");
+      }
     }
     if (elChecked) {
       const ls = data.status.last_scan;
@@ -1101,7 +1249,7 @@
     }
 
     const titleEl = document.getElementById("drawer-title");
-    if (titleEl) titleEl.textContent = finding.title;
+    if (titleEl) titleEl.textContent = capitaliseTitle(finding.title);
 
     const pathEl = document.getElementById("drawer-path");
     if (pathEl) pathEl.textContent = finding.path;
@@ -1117,10 +1265,18 @@
     if (recEl) recEl.textContent = finding.recommendation;
 
     const firstSeenEl = document.getElementById("drawer-first-seen");
-    if (firstSeenEl) firstSeenEl.textContent = formatIsoReadable(finding.first_seen);
+    if (firstSeenEl) {
+      const tf = formatLocalTimestamp(finding.first_seen);
+      firstSeenEl.textContent = tf.display;
+      if (tf.raw) firstSeenEl.title = tf.raw; else firstSeenEl.removeAttribute("title");
+    }
 
     const lastSeenEl = document.getElementById("drawer-last-seen");
-    if (lastSeenEl) lastSeenEl.textContent = formatIsoReadable(finding.last_seen);
+    if (lastSeenEl) {
+      const tf = formatLocalTimestamp(finding.last_seen);
+      lastSeenEl.textContent = tf.display;
+      if (tf.raw) lastSeenEl.title = tf.raw; else lastSeenEl.removeAttribute("title");
+    }
 
     const evList = document.getElementById("drawer-evidence");
     clearChildren(evList);
@@ -1148,9 +1304,10 @@
       relContainer.appendChild(makeEl("div", "drawer-event-item", "No path-specific events in latest event buffer."));
     } else {
       relEvents.forEach(function (ev) {
-        relContainer.appendChild(
-          makeEl("div", "drawer-event-item", formatTimeShort(ev.t) + " · " + ev.kind + " · " + ev.summary)
-        );
+        const tf = formatLocalTimestamp(ev.t);
+        const item = makeEl("div", "drawer-event-item", tf.display + " · " + ev.kind + " · " + ev.summary);
+        if (tf.raw) item.title = tf.raw;
+        relContainer.appendChild(item);
       });
     }
 
@@ -1318,6 +1475,7 @@
         const pad = function (n) { return n < 10 ? ("0" + n) : String(n); };
         const timeStr = pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
         headerNow.textContent = "Updated " + timeStr;
+        headerNow.title = d.toISOString();
       }
     }).catch(function (err) {
       showRefreshError("Connection error while refreshing snapshot. Retrying automatically.");
@@ -1549,6 +1707,17 @@
       if (loadingEl) loadingEl.classList.add("is-hidden");
       showLogin();
     });
+  }
+
+  if (root && root.CustodianUI && typeof root.CustodianUI === "object") {
+    root.CustodianUI.renderOverview = renderOverview;
+    root.CustodianUI.renderFindings = renderFindings;
+    root.CustodianUI.renderChanges = renderChanges;
+    root.CustodianUI.renderProfiles = renderProfiles;
+    root.CustodianUI.renderCoverage = renderCoverage;
+    root.CustodianUI.renderHealth = renderHealth;
+    root.CustodianUI.renderAll = renderAll;
+    root.CustodianUI.state = state;
   }
 
   document.addEventListener("DOMContentLoaded", initApp);

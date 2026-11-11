@@ -26,11 +26,9 @@ class DashboardAuth:
         self.path = self.root / 'dashboard-login.json'
 
     def _record(self):
-        fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        from . import _platform
+        fd = _platform.open_private_file(self.path, write=False, create=False, max_bytes=4096)
         with os.fdopen(fd, 'r', encoding='utf-8') as stream:
-            info = os.fstat(stream.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or info.st_mode & 0o077 or info.st_size > 4096:
-                raise ValueError('Dashboard login verifier must be a private, singly-linked regular file')
             record = json.loads(stream.read(4097))
         if not isinstance(record, dict) or record.get('schema_version') != 1 or record.get('scrypt') != _PARAMS:
             raise ValueError('Unsupported dashboard login verifier')
@@ -72,11 +70,8 @@ class DashboardAuth:
                 output.flush()
                 os.fsync(output.fileno())
             os.replace(name, self.path)
-            directory = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
+            from . import _platform
+            _platform.fsync_directory(self.root)
         finally:
             if os.path.exists(name):
                 os.unlink(name)

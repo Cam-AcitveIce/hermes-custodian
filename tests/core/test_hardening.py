@@ -1,15 +1,20 @@
 """Regression tests for independent-review findings R1, R2, R4, R5."""
 import os
 from pathlib import Path
-import pwd
 import tempfile
 import threading
 import types
 import unittest
 from unittest.mock import patch
 
+from custodian import _platform
 from custodian import policy as real_policy
 from custodian.engine import Engine
+
+if os.name != 'nt':
+    import pwd
+
+posix_only = unittest.skipIf(os.name == 'nt', 'requires POSIX permission semantics')
 
 
 class _PausingPolicy:
@@ -68,6 +73,7 @@ class ScanSerialisationTests(unittest.TestCase):
         self.assertEqual(errors, [])
         return Engine(self.state)
 
+    @posix_only
     def test_stale_clean_scan_cannot_resolve_newer_live_exposure(self):
         self.secret.chmod(0o600)
         Engine(self.state).scan()
@@ -75,6 +81,7 @@ class ScanSerialisationTests(unittest.TestCase):
         self.assertEqual(self.secret.stat().st_mode & 0o777, 0o644)
         self.assertEqual(engine.status()['findings_open'], 1)
 
+    @posix_only
     def test_stale_exposed_scan_cannot_reopen_after_newer_clean_scan(self):
         self.secret.chmod(0o644)
         Engine(self.state).scan()
@@ -83,10 +90,10 @@ class ScanSerialisationTests(unittest.TestCase):
         self.assertEqual(engine.status()['findings_open'], 0)
 
     def _hold(self, name):
-        import fcntl
-        fd = os.open(self.state / name, os.O_CREAT | os.O_RDWR, 0o600)
+        fd = _platform.open_private_file(self.state / name, write=True, create=True)
         self.addCleanup(os.close, fd)
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        self.assertTrue(_platform.try_lock_exclusive(fd))
+        self.addCleanup(_platform.unlock, fd)
 
     def test_busy_scan_lock_times_out_clearly_for_scan_and_setup(self):
         import time
@@ -103,7 +110,8 @@ class ScanSerialisationTests(unittest.TestCase):
             engine.setup({'watched_paths': [str(other)]})
         self.assertLess(time.monotonic() - started, 5)
         self.assertEqual(Engine(self.state).settings(), before)
-        self.assertEqual((self.state / 'scan.lock').stat().st_mode & 0o777, 0o600)
+        if os.name != 'nt':
+            self.assertEqual((self.state / 'scan.lock').stat().st_mode & 0o777, 0o600)
 
     def test_monitor_lifetime_lock_does_not_block_scan(self):
         self._hold('monitor.lock')
@@ -123,7 +131,11 @@ class ScopeLifecycleTests(unittest.TestCase):
         self.scope_b.mkdir()
         self.secret = self.scope_a / '.env'
         self.secret.write_text('FIXTURE')
-        self.secret.chmod(0o644)
+        self.exposed = True
+        exposure = patch('custodian.engine._platform.access_exposure',
+                         side_effect=lambda item: {'mode': 0o644} if self.exposed else None)
+        exposure.start()
+        self.addCleanup(exposure.stop)
         self.engine = Engine(self.root / 'state')
         self.engine.setup({'watched_paths': [str(self.scope_a)]})
         self.assertEqual(len(self.engine.scan()['findings']), 1)
@@ -150,7 +162,7 @@ class ScopeLifecycleTests(unittest.TestCase):
         self.assertEqual(self._only()['status'], 'out_of_scope')
 
     def test_reevaluated_under_broader_covering_scope_still_resolves(self):
-        self.secret.chmod(0o600)
+        self.exposed = False
         self.engine.setup({'watched_paths': [str(self.scope_a), str(self.scope_b)], 'max_files': 500})
         self.assertTrue(self.engine.scan()['complete'])
         self.assertEqual(self._only()['status'], 'resolved')
@@ -163,12 +175,13 @@ class ScopeLifecycleTests(unittest.TestCase):
         self.assertEqual(self._only()['status'], 'open')
         self.engine.setup({'watched_paths': [str(self.scope_b)]})
         self.engine.scan()
-        self.secret.chmod(0o600)
+        self.exposed = False
         self.engine.setup({'watched_paths': [str(self.scope_a)]})
         self.engine.scan()
         self.assertEqual(self._only()['status'], 'resolved')
 
 
+@posix_only
 class StateAncestorTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(dir=os.environ.get('TMPDIR'))
@@ -217,6 +230,7 @@ class StateAncestorTests(unittest.TestCase):
         self.assertFalse(engine.status()['configured'])
 
 
+@posix_only
 class DefaultUmaskAncestorTests(unittest.TestCase):
     """Stock Ubuntu/Raspberry Pi OS use umask 002, so ordinary folders are 775.
 
@@ -277,6 +291,7 @@ class DefaultUmaskAncestorTests(unittest.TestCase):
             self.assertFalse(_group_is_private(4242, uid))
 
 
+@posix_only
 class SensitiveSymlinkTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(dir=os.environ.get('TMPDIR'))
