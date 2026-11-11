@@ -6,6 +6,8 @@ import pytest
 
 from custodian import updates
 
+pytestmark = pytest.mark.skipif(os.name == 'nt', reason='Linux policy uses POSIX ownership, directory descriptors and flock')
+
 
 @pytest.fixture
 def policy(tmp_path):
@@ -446,3 +448,9 @@ def test_plan_security_only_static_origins_and_no_writes(policy):
     assert len(plan['plan_id']) == 64
     assert list(policy[0].rglob('*')) == before
     assert [c[0] for c in policy[1]] == ['/usr/bin/dpkg-query', '/usr/bin/systemctl', '/usr/bin/apt-config']
+
+
+@pytest.fixture(autouse=True)
+def select_linux_backend(monkeypatch):
+    from custodian import updates
+    monkeypatch.setattr(updates, 'NAME', 'linux')

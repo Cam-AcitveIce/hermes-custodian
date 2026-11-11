@@ -52,6 +52,8 @@ def test_windows_simulation_with_backend_imports_cleanly(monkeypatch):
         assert sys.modules.get('grp') is None or 'grp' not in sys.modules
         assert sys.modules.get('pwd') is None or 'pwd' not in sys.modules
     finally:
+        # Undo simulated module entries before restoring the native module graph.
+        monkeypatch.undo()
         sys.modules.clear()
         sys.modules.update(orig_modules)
 
@@ -82,6 +84,8 @@ def test_windows_simulation_missing_backend_fallback(monkeypatch):
         for fn in CONTRACT_FUNCTIONS:
             assert hasattr(custodian._platform, fn), f'Missing {fn} in custodian._platform'
     finally:
+        # Undo simulated module entries before restoring the native module graph.
+        monkeypatch.undo()
         sys.modules.clear()
         sys.modules.update(orig_modules)
 
@@ -123,3 +127,16 @@ def test_ast_no_module_level_posix_imports():
                         if sub.module:
                             name = sub.module.split('.')[0]
                             assert name not in forbidden, f"{rel} imports {name} inside top-level try"
+
+
+def test_simulations_preserve_native_module_graph():
+    from custodian import _platform
+    native = sys.modules['custodian._platform']
+    backend = sys.modules[native._backend.__name__]
+    with pytest.MonkeyPatch.context() as patcher:
+        test_windows_simulation_with_backend_imports_cleanly(patcher)
+    with pytest.MonkeyPatch.context() as patcher:
+        test_windows_simulation_missing_backend_fallback(patcher)
+    assert sys.modules['custodian._platform'] is native is _platform
+    assert sys.modules[backend.__name__] is native._backend is backend
+    assert native.validate_state_root is backend.validate_state_root

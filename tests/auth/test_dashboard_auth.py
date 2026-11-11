@@ -1,3 +1,5 @@
+import os
+from custodian import _platform
 import json
 import pytest
 
@@ -9,7 +11,10 @@ def test_persistent_password_verifier_never_stores_plaintext(tmp_path):
     auth.configure('cam-test', 'synthetic-password-for-tests-only')
     record = (tmp_path / 'state' / 'dashboard-login.json').read_text()
     assert 'synthetic-password-for-tests-only' not in record
-    assert (tmp_path / 'state' / 'dashboard-login.json').stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert (tmp_path / 'state' / 'dashboard-login.json').stat().st_mode & 0o777 == 0o600
+    else:
+        assert _platform.read_private_file(tmp_path / 'state' / 'dashboard-login.json', max_bytes=65536)
     restored = DashboardAuth(tmp_path / 'state')
     assert restored.configured()
     assert restored.authenticate('cam-test', 'synthetic-password-for-tests-only')

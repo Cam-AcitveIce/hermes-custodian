@@ -75,6 +75,8 @@ def test_windows_simulation_missing_backend_fallback_smoke(monkeypatch, tmp_path
             assert 'reason' in result
             assert isinstance(result['reason'], str) and len(result['reason']) > 0
     finally:
+        # Undo simulated module entries before restoring the native module graph.
+        monkeypatch.undo()
         sys.modules.clear()
         sys.modules.update(orig_modules)
 
@@ -109,6 +111,8 @@ def test_windows_simulation_backend_import(monkeypatch):
         plugin.register(ctx)
         assert set(ctx.tools) == {'custodian_status', 'custodian_findings', 'custodian_changes', 'custodian_scan'}
     finally:
+        # Undo simulated module entries before restoring the native module graph.
+        monkeypatch.undo()
         sys.modules.clear()
         sys.modules.update(orig_modules)
 
@@ -181,3 +185,57 @@ def test_windows_native_plugin_smoke(monkeypatch, tmp_path):
         assert result['ok'] is True, f"{tool_name} returned ok=False: {result}"
         assert result.get('status') != 'unsupported', f"{tool_name} returned unsupported: {result}"
         assert 'data' in result
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='requires native Win32 ACLs and handles')
+def test_windows_native_dashboard_and_discovery(tmp_path):
+    """Real filesystem/ACL coverage, independent of simulated capability tests."""
+    import threading
+    from custodian import _platform
+    from custodian._platform import windows
+    from custodian.dashboard_auth import DashboardAuth
+    from custodian.engine import Engine
+    from custodian.web import CustodianDashboardServer, _read_static_asset
+
+    assert _platform.validate_state_root is windows.validate_state_root
+    state = tmp_path / 'state'
+    auth = DashboardAuth(state)
+    auth.configure('operator', 'native-fixture-passphrase')
+    restored = DashboardAuth(state)
+    assert restored.authenticate('operator', 'native-fixture-passphrase')
+    assert not restored.authenticate('operator', 'wrong-password')
+
+    def session_server():
+        server = object.__new__(CustodianDashboardServer)
+        server.state_dir = state
+        server.session_key_path = state / 'dashboard-session-key.json'
+        server._lock = threading.Lock()
+        server._failed_logins = []
+        server.auth = restored
+        server.clock = lambda: 1000
+        server.session_ttl_seconds = 100
+        server.absolute_session_seconds = 1000
+        return server
+
+    server = session_server()
+    token, _ = server.create_session_cookie_value()
+    restarted = session_server()
+    assert restarted.validate_session(token)
+    assert restarted._read_key_record_unlocked() == server._read_key_record_unlocked()
+    restarted.revoke_session(token)
+    assert not server.validate_session(token)
+    for name in ('dashboard-login.json', 'dashboard-session-key.json'):
+        raw = windows.read_private_file(state / name, max_bytes=65536)
+        assert b'native-fixture-passphrase' not in raw
+
+    asset = tmp_path / 'index.html'
+    asset.write_bytes(b'<p>native asset fixture</p>')
+    assert _read_static_asset(asset) == asset.read_bytes()
+    hermes = tmp_path / 'hermes'
+    (hermes / 'profiles' / 'demo').mkdir(parents=True)
+    (hermes / 'config.json').write_text(json.dumps({'model': 'safe-model', 'api_key': 'PRIVATE-FIXTURE'}))
+    (hermes / 'profiles' / 'demo' / 'config.json').write_text('{"model":"demo-model"}')
+    entries = Engine(state).inventory(hermes)
+    assert [entry['name'] for entry in entries] == ['default', 'demo']
+    assert 'PRIVATE-FIXTURE' not in json.dumps(entries)
+    assert 'safe-model' in json.dumps(entries)

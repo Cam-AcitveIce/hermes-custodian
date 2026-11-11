@@ -310,3 +310,28 @@ def test_native_windows_reparse_rejected(tmp_path):
         with pytest.raises((OSError, ValueError)):
             with directory.open_directory('link'):
                 pytest.fail('reparse child entered')
+
+
+def test_set_information_marshals_scalar_and_structure_buffers(monkeypatch):
+    """ctypes ABI regression only; native Win32 secure-I/O tests remain required."""
+    import ctypes
+    from types import SimpleNamespace
+    seen = []
+    prototype = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_int,
+                                ctypes.c_void_p, ctypes.c_uint32)
+
+    @prototype
+    def set_information(handle, kind, pointer, size):
+        seen.append((handle, kind, ctypes.string_at(pointer, size)))
+        return 1
+
+    monkeypatch.setattr(windows, '_api', lambda: (SimpleNamespace(
+        SetFileInformationByHandle=set_information), None))
+    win = windows._Win()
+    win.discard(42)
+    assert seen == [(42, 4, b'\x01')]
+    class Record(ctypes.Structure):
+        _fields_ = [('value', ctypes.c_uint32)]
+    record = Record(123)
+    win._set_information(42, 3, record)
+    assert seen[-1] == (42, 3, bytes(record))

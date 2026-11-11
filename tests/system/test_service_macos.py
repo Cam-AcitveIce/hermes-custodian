@@ -1,14 +1,14 @@
 import importlib
 import plistlib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import subprocess
 import pytest
 
 
 def test_build_macos_plist_keys_and_hardening():
     service = importlib.import_module('custodian.service')
-    py = Path('/usr/local/bin/python3')
-    state = Path('/Users/testuser/.local/state/hermes-custodian')
+    py = PurePosixPath('/usr/local/bin/python3')
+    state = PurePosixPath('/Users/testuser/.local/state/hermes-custodian')
     
     # Test with enable=False
     plist = service.build_macos_plist(py, state, enable=False)
@@ -29,13 +29,15 @@ def test_build_macos_plist_keys_and_hardening():
     with pytest.raises(ValueError):
         service.build_macos_plist(Path('relative/python'), state)
     with pytest.raises(ValueError):
-        service.build_macos_plist(py, Path('/bad\x01path'))
+        service.build_macos_plist(py, PurePosixPath('/bad\x01path'))
 
 
 @pytest.fixture
 def fake_launchctl(tmp_path, monkeypatch):
     import json
     import sys
+    if sys.platform == "win32":
+        pytest.skip("LaunchAgent installation uses POSIX descriptor chmod")
     calls = []
     
     # Redirect HOME to tmp_path so ~/Library/LaunchAgents is isolated
@@ -70,7 +72,7 @@ def test_install_service_macos_writes_plist_mode_0600(fake_launchctl):
     
     state = tmp_path / 'state'
     state.mkdir()
-    py = Path('/usr/bin/python3')
+    py = PurePosixPath('/usr/bin/python3')
     
     res = service.install_service(state, py, enable=False)
     assert res['ok'] is True
@@ -94,7 +96,7 @@ def test_install_service_macos_with_enable(fake_launchctl):
     
     state = tmp_path / 'state'
     state.mkdir()
-    py = Path('/usr/bin/python3')
+    py = PurePosixPath('/usr/bin/python3')
     
     res = service.install_service(state, py, enable=True)
     assert res['ok'] is True

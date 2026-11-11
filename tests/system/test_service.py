@@ -1,12 +1,12 @@
 import importlib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
 
 def test_unit_escapes_arguments_and_has_nonrestrictive_hardening():
     service = importlib.import_module('custodian.service')
-    unit = service.build_unit(Path('/opt/Py thon%/$bin/python'), Path('/data/a "b"%/$HOME'))
+    unit = service.build_unit(PurePosixPath('/opt/Py thon%/$bin/python'), PurePosixPath('/data/a "b"%/$HOME'))
     assert 'ExecStart="/opt/Py thon%%/$bin/python" -m custodian.cli --state-dir "/data/a \\"b\\"%%/$$HOME" monitor' in unit
     for directive in ('NoNewPrivileges=yes', 'PrivateTmp=yes', 'UMask=0077', 'MemoryMax=192M', 'Restart=on-failure'):
         assert directive in unit
@@ -17,6 +17,18 @@ def test_unit_escapes_arguments_and_has_nonrestrictive_hardening():
 
 @pytest.fixture
 def fake_systemctl(tmp_path, monkeypatch):
+    if __import__('os').name == 'nt':
+        import os
+        from custodian import service
+        calls = []
+        def run(args, **kwargs):
+            assert args[0] == 'systemctl'
+            calls.append(args[1:])
+            return service.subprocess.CompletedProcess(args, int(os.environ.get('CTL_EXIT', '0')),
+                stdout=os.environ.get('CTL_OUTPUT', '') + '\n', stderr='')
+        monkeypatch.setattr(service.subprocess, 'run', run)
+        monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'config'))
+        return tmp_path, lambda: calls
     import json
     import sys
     executable = tmp_path / 'systemctl'
@@ -32,12 +44,13 @@ def fake_systemctl(tmp_path, monkeypatch):
     return tmp_path, lambda: [json.loads(line) for line in log.read_text().splitlines()]
 
 
+@pytest.mark.skipif(__import__("os").name == "nt", reason="Linux unit installation requires POSIX descriptor chmod")
 def test_install_writes_unit_and_reloads_without_implicit_enable(fake_systemctl):
     service = importlib.import_module('custodian.service')
     root, calls = fake_systemctl
-    result = service.install_service(root / 'state', Path('/usr/bin/python3'))
+    result = service.install_service(root / 'state', PurePosixPath('/usr/bin/python3'))
     assert result['ok'] is True
-    assert (root / 'config/systemd/user' / service.UNIT_NAME).read_text() == service.build_unit(Path('/usr/bin/python3'), root / 'state')
+    assert (root / 'config/systemd/user' / service.UNIT_NAME).read_text() == service.build_unit(PurePosixPath('/usr/bin/python3'), root / 'state')
     assert calls() == [['--user', 'daemon-reload']]
 
 
@@ -52,11 +65,12 @@ def test_status_reports_manager_properties_not_just_command_success(fake_systemc
     assert result['result'] == 'exit-code'
 
 
+@pytest.mark.skipif(__import__("os").name == "nt", reason="Linux unit installation requires POSIX descriptor chmod")
 def test_enable_is_explicit_and_verified(fake_systemctl, monkeypatch):
     service = importlib.import_module('custodian.service')
     root, calls = fake_systemctl
     monkeypatch.setenv('CTL_OUTPUT', 'LoadState=loaded\nActiveState=inactive\nUnitFileState=enabled')
-    result = service.install_service(root / 'state', Path('/usr/bin/python3'), enable=True)
+    result = service.install_service(root / 'state', PurePosixPath('/usr/bin/python3'), enable=True)
     assert result['ok'] is True
     assert result['enabled'] is True
     assert calls()[1] == ['--user', 'enable', service.UNIT_NAME]
@@ -64,10 +78,11 @@ def test_enable_is_explicit_and_verified(fake_systemctl, monkeypatch):
     assert not any('start' in call or '--now' in call for call in calls())
 
 
+@pytest.mark.skipif(__import__("os").name == "nt", reason="Linux unit installation requires POSIX descriptor chmod")
 def test_enable_does_not_claim_success_without_readback(fake_systemctl):
     service = importlib.import_module('custodian.service')
     root, _ = fake_systemctl
-    result = service.install_service(root / 'state', Path('/usr/bin/python3'), enable=True)
+    result = service.install_service(root / 'state', PurePosixPath('/usr/bin/python3'), enable=True)
     assert result['ok'] is False
 
 
@@ -204,3 +219,9 @@ def test_status_subprocess_timeout_is_unknown(monkeypatch):
     result = service.service_status()
     assert result['ok'] is False
     assert result['active'] is None
+
+
+@pytest.fixture(autouse=True)
+def select_linux_backend(monkeypatch):
+    from custodian import service
+    monkeypatch.setattr(service, 'NAME', 'linux')

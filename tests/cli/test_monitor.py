@@ -1,3 +1,4 @@
+import os
 import json
 import pytest
 
@@ -16,18 +17,27 @@ def test_monitor_once_scans_and_records_stopped_health(tmp_path):
     health = json.loads((tmp_path / 'monitor.json').read_text())
     assert health['running'] is False
     assert health['last_result']['complete'] is True
-    assert (tmp_path / 'monitor.json').stat().st_mode & 0o777 == 0o600
+    from custodian import _platform
+    if os.name != "nt":
+        assert (tmp_path / 'monitor.json').stat().st_mode & 0o777 == 0o600
+    else:
+        assert _platform.read_private_file(tmp_path / 'monitor.json', max_bytes=65536)
 
 
 def test_duplicate_monitor_is_rejected(tmp_path):
-    import fcntl
+    import os
+    from custodian import _platform
     from custodian.monitor import run_monitor
     class Engine:
         def settings(self): return {'interval_seconds': 10}
-    with (tmp_path / 'monitor.lock').open('w') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    fd = _platform.open_private_file(tmp_path / 'monitor.lock', write=True, create=True)
+    try:
+        assert _platform.try_lock_exclusive(fd)
         with pytest.raises(RuntimeError, match='already running'):
             run_monitor(Engine(), tmp_path, once=True)
+    finally:
+        _platform.unlock(fd)
+        os.close(fd)
 
 
 def test_monitor_rereads_interval_each_cycle_and_enforces_minimum(tmp_path, monkeypatch):

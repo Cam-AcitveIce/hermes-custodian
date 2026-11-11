@@ -1,4 +1,5 @@
 import os
+import pytest
 import subprocess
 import sys
 from pathlib import Path
@@ -10,7 +11,14 @@ def test_default_state_follows_explicit_profile(monkeypatch, tmp_path):
     assert default_state_dir() == tmp_path / 'profile' / 'plugin-data' / 'hermes-custodian'
     monkeypatch.delenv('HERMES_HOME')
     monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'state'))
-    assert default_state_dir() == tmp_path / 'state' / 'hermes-custodian'
+    from custodian import _platform
+    if _platform.NAME == 'macos':
+        expected = Path.home() / 'Library/Application Support/hermes-custodian'
+    elif _platform.IS_WINDOWS:
+        expected = Path(os.environ.get('LOCALAPPDATA', str(Path.home() / 'AppData/Local'))) / 'hermes-custodian'
+    else:
+        expected = tmp_path / 'state' / 'hermes-custodian'
+    assert default_state_dir() == expected
 
 
 def test_service_failure_has_nonzero_exit(monkeypatch, tmp_path, capsys):
@@ -75,6 +83,7 @@ def test_updates_security_plan_wires_enable_and_disable(monkeypatch, tmp_path, c
     assert main(['--state-dir', str(tmp_path), 'updates', 'security-plan', '--enable']) == 1
 
 
+@pytest.mark.skipif(__import__("os").name == "nt", reason="Linux root policy CLI")
 def test_updates_security_apply_enforces_root_install_tty_replan_and_confirmation(monkeypatch, tmp_path, capsys):
     import builtins
     import json

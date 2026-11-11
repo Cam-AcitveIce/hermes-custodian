@@ -246,7 +246,7 @@ class _Win:
 
     def open_path(self, path, mode='pin'):
         k, _ = _api()
-        handle = k.CreateFileW(str(path), 0x120080 | (1 if mode == 'dir' else 0), 3, None, _OPEN_EXISTING,
+        handle = k.CreateFileW(str(path), 0x120081, 3, None, _OPEN_EXISTING,
                                0x02000000 | _FILE_FLAG_OPEN_REPARSE_POINT, None)
         if handle is None or handle == ctypes.c_void_p(-1).value:
             raise _last_error()
@@ -271,7 +271,8 @@ class _Win:
         access = 0x120080  # SYNCHRONIZE | FILE_READ_ATTRIBUTES
         if mode in ('meta', 'read', 'file'):
             access |= 0x20000  # READ_CONTROL
-        if mode == 'dir':
+        if mode in ('pin', 'dir'):
+            # Data/list access makes Windows enforce sharing (including no delete).
             access |= 1
         if mode in ('read', 'file'):
             access |= 1
@@ -371,7 +372,7 @@ class _Win:
         k.SetFileInformationByHandle.argtypes = [ctypes.c_void_p, ctypes.c_int,
                                                 ctypes.c_void_p, ctypes.c_uint32]
         k.SetFileInformationByHandle.restype = ctypes.c_int
-        if not k.SetFileInformationByHandle(handle, kind, buffer, ctypes.sizeof(buffer)):
+        if not k.SetFileInformationByHandle(handle, kind, ctypes.byref(buffer), ctypes.sizeof(buffer)):
             raise _last_error()
 
     def replace(self, handle, parent, name):
@@ -551,9 +552,10 @@ class _Win:
             finally:
                 k.LocalFree(sid)
         # ReOpenFile upgrades rights on the same object, never by its current name.
+        # READ_CONTROL is needed when protecting/reading back the security descriptor.
         k.ReOpenFile.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32]
         k.ReOpenFile.restype = ctypes.c_void_p
-        writable = k.ReOpenFile(handle, 0x40000, 7, 0x02000000 | _FILE_FLAG_OPEN_REPARSE_POINT)
+        writable = k.ReOpenFile(handle, 0x60000, 7, 0x02000000 | _FILE_FLAG_OPEN_REPARSE_POINT)
         if writable is None or writable == ctypes.c_void_p(-1).value:
             raise _last_error()
         a.SetSecurityInfo.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32,

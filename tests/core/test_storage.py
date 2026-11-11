@@ -1,3 +1,4 @@
+from custodian import _platform
 import os
 from pathlib import Path
 import tempfile
@@ -16,11 +17,14 @@ class StorageTests(unittest.TestCase):
 
     def test_failed_atomic_replace_preserves_previous_settings_and_removes_temp(self):
         self.store.save_settings({'value': 'old'})
-        with patch('custodian.storage.os.replace', side_effect=OSError('synthetic failure')):
+        replace = ('custodian._platform.windows._Win.replace' if os.name == 'nt'
+                   else 'custodian.storage.os.replace')
+        with patch(replace, side_effect=OSError('synthetic failure')):
             with self.assertRaises(OSError):
                 self.store.save_settings({'value': 'new'})
         self.assertEqual(self.store.settings(), {'value': 'old'})
         self.assertEqual(list(self.store.root.glob('.settings-*')), [])
+        self.assertEqual(list(self.store.root.glob('.custodian-*')), [])
 
     def test_state_directory_rejects_symlink_parent_before_creating_external_directory(self):
         target = self.root / 'outside'
@@ -51,8 +55,12 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(db.execute('SELECT count(*) FROM events').fetchone()[0], 10000)
             self.assertEqual(db.execute('SELECT count(*) FROM findings').fetchone()[0], 0)
         self.assertEqual(self.store.last_scan()['scan_id'], 'new')
-        self.assertEqual((self.store.root / 'state.sqlite3').stat().st_mode & 0o777, 0o600)
+        if os.name != "nt":
+            self.assertEqual((self.store.root / 'state.sqlite3').stat().st_mode & 0o777, 0o600)
+        else:
+            self.assertIsInstance(_platform.read_private_file((self.store.root / 'state.sqlite3'), max_bytes=1048576), bytes)
 
+    @unittest.skipIf(os.name == "nt", "POSIX mode/fstat/replace regression; native ACL and atomic I/O tested separately")
     def test_existing_state_root_and_database_permissions_are_hardened(self):
         self.store.root.chmod(0o755)
         self.store.save_settings({'value': 'fixture'})
@@ -70,6 +78,7 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(store.config_path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(database.stat().st_mode & 0o777, 0o600)
 
+    @unittest.skipIf(os.name == "nt", "POSIX mode/fstat/replace regression; native ACL and atomic I/O tested separately")
     def test_wrong_owner_state_root_is_rejected(self):
         import types
         with patch('custodian.storage.os.fstat', return_value=types.SimpleNamespace(st_uid=-1)):
@@ -81,7 +90,8 @@ class StorageTests(unittest.TestCase):
         with patch('custodian.storage.Path.home', return_value=self.root):
             with self.assertRaises(ValueError):
                 Storage(self.root)
-        self.assertEqual(self.root.stat().st_mode & 0o777, 0o755)
+        if os.name != 'nt':
+            self.assertEqual(self.root.stat().st_mode & 0o777, 0o755)
 
     def test_settings_symlink_is_not_followed(self):
         external = self.root / 'external.json'

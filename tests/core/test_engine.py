@@ -1,3 +1,4 @@
+from custodian import _platform
 import json
 import os
 from pathlib import Path
@@ -23,14 +24,17 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(settings['schema_version'], 1)
         self.assertGreaterEqual(settings['interval_seconds'], 10)
         self.assertEqual(Engine(self.root / 'state').settings(), settings)
-        self.assertEqual((self.root / 'state' / 'settings.json').stat().st_mode & 0o777, 0o600)
+        if os.name != "nt":
+            self.assertEqual((self.root / 'state' / 'settings.json').stat().st_mode & 0o777, 0o600)
+        else:
+            self.assertIsInstance(_platform.read_private_file((self.root / 'state' / 'settings.json'), max_bytes=1048576), bytes)
         json.dumps(self.engine.status())
         self.assertFalse(self.engine.status()['monitoring'])
 
     def test_scan_persists_baseline_detects_changes_and_deduplicates_findings(self):
         from unittest.mock import patch
         import types
-        item = {'path': str(self.scope / '.env'), 'mode': 0o100644, 'uid': os.getuid(),
+        item = {'path': str(self.scope / '.env'), 'mode': 0o100644, 'uid': _platform.current_principal(),
                 'size': 8, 'mtime_ns': 1}
         policy = types.SimpleNamespace(
             bounded_snapshot=lambda *args, **kwargs: {'files': [dict(item)], 'errors': [], 'complete': True},
@@ -93,6 +97,7 @@ class EngineTests(unittest.TestCase):
             self.assertEqual(self.engine.updates(), expected)
             check.assert_called_once_with()
 
+    @unittest.skipIf(os.name == "nt", "POSIX chmod exposure transitions; native Windows scan coverage in plugin smoke")
     def test_real_policy_end_to_end_never_reads_sensitive_fixture_contents(self):
         from unittest.mock import patch
         secret = self.scope / '.env'
@@ -126,7 +131,7 @@ class EngineTests(unittest.TestCase):
     def test_incomplete_scan_preserves_complete_baseline_and_open_findings(self):
         from unittest.mock import patch
         import types
-        item = {'path': str(self.scope / '.env'), 'mode': 0o644, 'uid': os.getuid(), 'size': 3, 'mtime_ns': 1}
+        item = {'path': str(self.scope / '.env'), 'mode': 0o644, 'uid': _platform.current_principal(), 'size': 3, 'mtime_ns': 1}
         snapshot = {'files': [item], 'errors': [], 'complete': True}
         policy = types.SimpleNamespace(bounded_snapshot=lambda *args, **kwargs: snapshot,
                                        is_sensitive=lambda path: path.name == '.env', sanitise_text=str)
@@ -151,7 +156,7 @@ class EngineTests(unittest.TestCase):
         calls = []
         def snapshot(root, **kwargs):
             calls.append(kwargs['max_files'])
-            return {'files': [{'path': str(root / 'file'), 'mode': 0o600, 'uid': os.getuid(),
+            return {'files': [{'path': str(root / 'file'), 'mode': 0o600, 'uid': _platform.current_principal(),
                                'size': 0, 'mtime_ns': 1}], 'errors': [], 'complete': True}
         policy = types.SimpleNamespace(bounded_snapshot=snapshot, is_sensitive=lambda path: False, sanitise_text=str)
         self.engine.setup({'watched_paths': [str(self.scope), str(other)], 'max_files': 1})
@@ -194,7 +199,10 @@ class EngineTests(unittest.TestCase):
                   'last_result': None, 'error': None, 'heartbeat_at': time.time()}
         path.write_text(json.dumps(health))
         self.assertTrue(self.engine.status()['monitoring'])
-        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        if os.name != "nt":
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        else:
+            self.assertIsInstance(_platform.read_private_file(path, max_bytes=1048576), bytes)
         health['error'] = 'RuntimeError: monitoring cycle failed'
         path.write_text(json.dumps(health))
         self.assertEqual(self.engine.status()['service_health'], 'degraded')

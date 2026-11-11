@@ -7,6 +7,17 @@ import pytest
 
 @pytest.fixture
 def fake_apt(tmp_path, monkeypatch):
+    if __import__('os').name == 'nt':
+        import os
+        from custodian import updates
+        calls = []
+        def run(args, **kwargs):
+            assert args == ['apt', 'list', '--upgradable']
+            calls.append({'args': args[1:], 'locale': kwargs['env']['LC_ALL']})
+            return updates.subprocess.CompletedProcess(args, int(os.environ.get('APT_EXIT', '0')),
+                stdout=os.environ.get('APT_OUTPUT', 'Listing...') + '\n', stderr='')
+        monkeypatch.setattr(updates.subprocess, 'run', run)
+        return lambda: calls[-1]
     executable = tmp_path / 'apt'
     log = tmp_path / 'apt.json'
     executable.write_text('#!' + sys.executable + '\nimport os, sys, json\n'
@@ -108,10 +119,14 @@ def test_configure_security_updates_wraps_plan_and_apply_for_trusted_cli(monkeyp
     assert seen == [('plan', True), ('apply', fake_plan, 'APPLY SECURITY POLICY ' + 'a' * 64)]
 
 
-def test_import_updates_succeeds_on_win32_with_fcntl_blocked(monkeypatch):
-    import sys
-    monkeypatch.setattr(sys, 'platform', 'win32')
-    monkeypatch.setitem(sys.modules, 'fcntl', None)
-    monkeypatch.delitem(sys.modules, 'custodian.updates', raising=False)
-    import custodian.updates
-    assert custodian.updates is not None
+def test_import_updates_succeeds_on_win32_with_fcntl_blocked():
+    import subprocess
+    script = "import sys; sys.platform = 'win32'; sys.modules['fcntl'] = None; import custodian.updates"
+    result = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.fixture(autouse=True)
+def select_linux_backend(monkeypatch):
+    from custodian import updates
+    monkeypatch.setattr(updates, 'NAME', 'linux')

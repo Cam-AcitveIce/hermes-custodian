@@ -56,7 +56,8 @@ def test_snapshot_never_opens_credentials_or_special_entries(tmp_path, monkeypat
         (tmp_path / name).write_text('fixture-secret')
     (tmp_path / 'memories').mkdir()
     (tmp_path / 'memories' / 'private.md').write_text('fixture-private')
-    os.mkfifo(tmp_path / 'pipe.py')
+    if hasattr(os, 'mkfifo'):
+        os.mkfifo(tmp_path / 'pipe.py')
     (tmp_path / 'alias.py').symlink_to(tmp_path / '.env.production')
     opened = []
     original = os.open
@@ -92,6 +93,7 @@ def test_snapshot_rejects_symlinked_roots_and_reports_errors(tmp_path):
         assert snapshot['files'] == []
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX syscall/metadata regression; Win32 adversarial coverage in test_windows_backend")
 def test_snapshot_file_swap_to_fifo_never_reads_special_file(tmp_path, monkeypatch):
     target = tmp_path / 'code.py'
     target.write_text('fixture')
@@ -128,7 +130,9 @@ def test_snapshot_hardlinked_source_is_metadata_only(tmp_path, monkeypatch):
 def test_snapshot_entry_budget_counts_excluded_and_empty_directories(tmp_path, monkeypatch):
     for n in range(20):
         (tmp_path / str(n)).mkdir()
+    from custodian import _platform
     monkeypatch.setattr(policy, 'MAX_ENTRIES', 3, raising=False)
+    monkeypatch.setattr(_platform._backend, 'MAX_ENTRIES', 3)
     calls = []
     original = os.stat
     def count(*args, **kwargs):
@@ -153,7 +157,9 @@ def test_snapshot_exclusions_prune_before_open(tmp_path, monkeypatch):
 
 def test_snapshot_time_guard_stops_before_content_read(tmp_path, monkeypatch):
     (tmp_path / 'code.py').write_text('fixture')
+    from custodian import _platform
     monkeypatch.setattr(policy, 'MAX_SECONDS', 0, raising=False)
+    monkeypatch.setattr(_platform._backend, 'MAX_SECONDS', 0)
     def forbidden_read(*args):
         raise AssertionError('time budget expired before content read')
     monkeypatch.setattr(os, 'read', forbidden_read)
@@ -162,6 +168,7 @@ def test_snapshot_time_guard_stops_before_content_read(tmp_path, monkeypatch):
     assert snapshot['errors']
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX syscall/metadata regression; Win32 adversarial coverage in test_windows_backend")
 def test_snapshot_mutation_during_hash_discards_digest(tmp_path, monkeypatch):
     target = tmp_path / 'code.py'
     target.write_bytes(b'a' * 64)
@@ -178,12 +185,15 @@ def test_snapshot_mutation_during_hash_discards_digest(tmp_path, monkeypatch):
 
 def test_snapshot_depth_budget_bounds_open_descriptors(tmp_path, monkeypatch):
     (tmp_path / 'a' / 'b' / 'c').mkdir(parents=True)
+    from custodian import _platform
     monkeypatch.setattr(policy, 'MAX_DEPTH', 1, raising=False)
+    monkeypatch.setattr(_platform._backend, 'MAX_DEPTH', 1)
     snapshot = policy.bounded_snapshot(tmp_path, [], 10, 1024)
     assert not snapshot['complete']
     assert snapshot['errors']
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX syscall/metadata regression; Win32 adversarial coverage in test_windows_backend")
 def test_snapshot_directory_replacement_is_not_traversed(tmp_path, monkeypatch):
     root = tmp_path / 'root'
     root.mkdir()
@@ -222,7 +232,13 @@ def test_snapshot_sensitive_root_is_not_enumerated(tmp_path, monkeypatch):
         raise AssertionError('sensitive root must not be enumerated')
     monkeypatch.setattr(os, 'scandir', forbidden)
     snapshot = policy.bounded_snapshot(root, [], 10, 1024)
-    assert snapshot['files'] == [policy.safe_metadata(root)]
+    if os.name != 'nt':
+        assert snapshot['files'] == [policy.safe_metadata(root)]
+    else:
+        assert len(snapshot['files']) == 1
+        item = snapshot['files'][0]
+        assert item['path'] == str(root) and 'sha256' not in item
+        assert item['size'] == root.stat().st_size
 
 
 def test_snapshot_invalid_limits_and_traversal_fail_closed(tmp_path):
@@ -238,7 +254,9 @@ def test_snapshot_invalid_limits_and_traversal_fail_closed(tmp_path):
 def test_snapshot_aggregate_byte_budget(tmp_path, monkeypatch):
     (tmp_path / 'a.py').write_bytes(b'a' * 10)
     (tmp_path / 'b.py').write_bytes(b'b' * 10)
+    from custodian import _platform
     monkeypatch.setattr(policy, 'MAX_TOTAL_BYTES', 16, raising=False)
+    monkeypatch.setattr(_platform._backend, 'MAX_TOTAL_BYTES', 16)
     read_bytes = []
     original = os.read
     def counted_read(fd, count):
@@ -270,6 +288,7 @@ def test_config_enabled_plugins_only_names_not_container_keys():
 
 
 @pytest.mark.parametrize('directory', [False, True])
+@pytest.mark.skipif(os.name == "nt", reason="POSIX syscall/metadata regression; Win32 adversarial coverage in test_windows_backend")
 def test_symlink_swap_at_open_is_blocked(tmp_path, monkeypatch, directory):
     root = tmp_path / 'root'
     root.mkdir()
@@ -297,6 +316,7 @@ def test_symlink_swap_at_open_is_blocked(tmp_path, monkeypatch, directory):
     assert result['files'] == []
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX syscall/metadata regression; Win32 adversarial coverage in test_windows_backend")
 def test_socket_is_metadata_only(tmp_path, monkeypatch):
     # Short relative name avoids the AF_UNIX platform path-length limit.
     monkeypatch.chdir(tmp_path)
@@ -339,19 +359,21 @@ def test_safe_metadata_is_lstat_only(tmp_path):
     info = policy.safe_metadata(link)
     assert info == {'path': str(link), 'type': 'symlink',
                     'mode': stat.S_IMODE(link.lstat().st_mode),
-                    'uid': os.getuid(), 'size': link.lstat().st_size,
+                    'uid': link.lstat().st_uid, 'size': link.lstat().st_size,
                     'mtime_ns': link.lstat().st_mtime_ns}
 
 
 def test_snapshot_metadata_retains_entry_type(tmp_path):
     (tmp_path / 'regular.txt').write_text('fixture')
     (tmp_path / 'link.txt').symlink_to(tmp_path / 'regular.txt')
-    os.mkfifo(tmp_path / 'fifo')
+    if hasattr(os, 'mkfifo'):
+        os.mkfifo(tmp_path / 'fifo')
     snapshot = policy.bounded_snapshot(tmp_path, [], 10, 1024)
     by_name = {Path(f['path']).name: f for f in snapshot['files']}
     assert by_name['regular.txt']['type'] == 'file'
     assert by_name['link.txt']['type'] == 'symlink'
-    assert by_name['fifo']['type'] == 'other'
+    if hasattr(os, 'mkfifo'):
+        assert by_name['fifo']['type'] == 'other'
     for entry in by_name.values():
         assert {'path', 'type', 'mode', 'uid', 'size', 'mtime_ns'} <= set(entry)
 
