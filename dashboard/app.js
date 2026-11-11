@@ -5,7 +5,7 @@
   const VIEW_META = {
     overview: {
       title: "Overview",
-      subtitle: "Local posture summary for Raspberry Pi Hermes host"
+      subtitle: "Local posture summary for this Hermes device"
     },
     findings: {
       title: "Findings",
@@ -25,7 +25,7 @@
     },
     health: {
       title: "System Health",
-      subtitle: "Custodian monitor service heartbeat and cached APT package state"
+      subtitle: "Custodian monitor service heartbeat and cached OS updates"
     }
   };
 
@@ -397,7 +397,8 @@
         privacy_notice: String(inv.privacy_notice || "Credentials, memory and chat history are never read.")
       },
       updates: {
-        status: String(upd.status || "ok"),
+        status: String(upd.status || "unknown"),
+        error: typeof upd.error === "string" ? upd.error.trim() : "",
         upgradable_count: Number(upd.upgradable_count || packages.length || 0),
         security_unknown_count: Number(upd.security_unknown_count || packages.length || 0),
         packages: packages
@@ -724,9 +725,14 @@
     const updSub = document.getElementById("fact-updates-sub");
     if (updVal && updSub) {
       const pkgCount = data.updates.packages.length;
-      updVal.textContent = pkgCount + (pkgCount === 1 ? " upgradable" : " upgradable");
-      updSub.textContent = "security classification unknown";
+      const available = data.updates.status === "ok";
+      updVal.textContent = available ? pkgCount + " upgradable" : updateCheckMessage(data.updates);
+      updSub.textContent = available ? "security classification unknown" : data.updates.error;
     }
+  }
+
+  function updateCheckMessage(updates) {
+    return updates.status === "unknown" ? "Unknown" : "Update check unavailable";
   }
 
   function renderFindings(data) {
@@ -1188,6 +1194,20 @@
     const tag = document.getElementById("health-updatable-tag");
     const summary = document.getElementById("health-updates-summary");
     const packages = data.updates.packages;
+
+    if (data.updates.status !== "ok") {
+      const message = updateCheckMessage(data.updates);
+      if (tag) tag.textContent = message;
+      if (summary) summary.textContent = data.updates.error || message;
+      const tbody = document.getElementById("updates-tbody");
+      clearChildren(tbody);
+      const tr = makeEl("tr");
+      const td = makeEl("td", "", message);
+      td.colSpan = 4;
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+      return;
+    }
 
     if (tag) {
       tag.textContent = packages.length + (packages.length === 1 ? " upgradable" : " upgradable");
