@@ -1,10 +1,10 @@
-# Hermes Custodian
+# Hermes Security Warden
 
 **Ask your Hermes agent: "what needs attention on this machine?" and get an answer backed by evidence.**
 
-Hermes Custodian is a quiet watcher for the device your agent lives on. It remembers what your files and permissions looked like, notices when something changes, and shows you exactly what needs a look: in the terminal, in a local dashboard, or straight from your agent.
+Hermes Security Warden is a quiet watcher for the device your agent lives on. It remembers what your files and permissions looked like, notices when something changes, and shows you exactly what needs a look: in the terminal, in a local dashboard, or straight from your agent.
 
-- **Your agent can check its own home.** Four read-only tools (`custodian_status`, `custodian_findings`, `custodian_changes`, `custodian_scan`) work on Linux, macOS and native Windows.
+- **Your agent can check its own home.** Four read-only tools (`warden_status`, `warden_findings`, `warden_changes`, `warden_scan`) work on Linux, macOS and native Windows.
 - **Every finding shows its evidence.** The path, what's wrong, when it was seen and what to do next. No vague scores, no black box.
 - **It tells you what changed.** A persistent baseline turns "something is different" into a dated list.
 - **You choose the scope.** Nothing is watched until you approve it in a first-run setup, and credential files, memory and chat history are never opened.
@@ -12,6 +12,8 @@ Hermes Custodian is a quiet watcher for the device your agent lives on. It remem
 - **Private by design.** The dashboard runs on your machine only, behind a login. No telemetry, no cloud, no self-updater, and the AI can't give itself more power.
 
 Setup is a guided first run. See [Installation and setup](#installation-and-setup).
+
+Naming: Hermes Security Warden is the display name, and the agent tools are `warden_*`. The plugin/catalog ID (`hermes-custodian`), the Python package and CLI (`custodian`), the state folder and the service identifiers keep their existing names, so nothing needs migrating. The earlier `custodian_*` tool names are gone, with no aliases.
 
 Status: release candidate. The automated suite passes on GitHub-hosted Linux, macOS and Windows runners with Python 3.11, 3.12, 3.13 and 3.14, including native Windows plugin-tool and dashboard/discovery workflows. A hands-on installation on a user's Windows machine remains recommended. No antivirus, exploit detection or tamper-proof sandbox claim.
 
@@ -37,7 +39,7 @@ Captured from the installed package using synthetic fixture data only (paths ali
 - Terminal control centre: evidence, changes and coverage.
 - Background workload: bounded scans, persistent baselines, duplicate-instance protection and heartbeat.
 - On-demand authenticated loopback web dashboard, focused on findings and changes—not a live agent-command feed.
-- Four Hermes tools: status, findings, changes and scoped read-only scanning.
+- Four Hermes tools (`warden_status`, `warden_findings`, `warden_changes`, `warden_scan`): status, findings, changes and scoped read-only scanning. They take no arguments.
 - Explicit user-level background-service management (systemd, launchd or Task Scheduler) and read-only OS update checks.
 
 ## Installation and setup
@@ -110,7 +112,7 @@ The web dashboard binds to 127.0.0.1 only and signs in with a username and passw
 
 The plugin registers tools without scanning files or starting processes at import time. Explicitly requested scans read selected regular files and metadata outside the plugin data directory; metadata inventory reads selected Hermes configuration, never private conversation/memory/personality files. No telemetry or cloud model calls are needed for monitoring. Stored local state contains paths, fingerprints, findings, redacted inventory and event history—not credential contents.
 
-The user-service and native update adapters execute fixed argument-array subprocesses (systemctl/APT, launchctl/softwareupdate, or schtasks/PowerShell with a fixed Windows Update query), with timeouts and no shell command construction. The monitor is long-running only when explicitly launched/installed. The dashboard is a separate on-demand local process. Host configuration changes are never implied by installing or registering the plugin.
+The user-service and native update adapters execute fixed argument-array subprocesses (systemctl/APT, launchctl/softwareupdate, or schtasks/PowerShell with a fixed Windows Update query), with timeouts and no shell command construction. Each child process gets a freshly built minimal environment, never the agent's own: a fixed system-directory `PATH` and `C` locale, plus only what that command needs (`HOME`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` for `systemctl --user`; `SystemRoot`, `WINDIR`, `SystemDrive`, `TEMP` and `TMP` for the Windows tools, with the profile data directories added for PowerShell). API keys, proxy settings, `PYTHONPATH`, `LD_PRELOAD`, `DYLD_*` and the parent `PATH` are not passed on. The monitor is long-running only when explicitly launched/installed. The dashboard is a separate on-demand local process. Host configuration changes are never implied by installing or registering the plugin.
 
 ## Verification
 

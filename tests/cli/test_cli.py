@@ -158,7 +158,7 @@ def test_plugin_registers_only_four_readonly_tools_and_excludes_admin_actions():
         def register_tool(self, **kwargs):
             tools[kwargs['name']] = kwargs
     module.register(Context())
-    assert set(tools) == {'custodian_status', 'custodian_findings', 'custodian_changes', 'custodian_scan'}
+    assert set(tools) == {'warden_status', 'warden_findings', 'warden_changes', 'warden_scan'}
     assert len(tools) == 4
     plugin_source = (root / '__init__.py').read_text()
     web_source = Path(web.__file__).read_text()

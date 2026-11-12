@@ -17,31 +17,20 @@ def test_unit_escapes_arguments_and_has_nonrestrictive_hardening():
 
 @pytest.fixture
 def fake_systemctl(tmp_path, monkeypatch):
-    if __import__('os').name == 'nt':
-        import os
-        from custodian import service
-        calls = []
-        def run(args, **kwargs):
-            assert args[0] == 'systemctl'
-            calls.append(args[1:])
-            return service.subprocess.CompletedProcess(args, int(os.environ.get('CTL_EXIT', '0')),
-                stdout=os.environ.get('CTL_OUTPUT', '') + '\n', stderr='')
-        monkeypatch.setattr(service.subprocess, 'run', run)
-        monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'config'))
-        return tmp_path, lambda: calls
-    import json
-    import sys
-    executable = tmp_path / 'systemctl'
-    log = tmp_path / 'calls.jsonl'
-    executable.write_text('#!' + sys.executable + '\nimport json, os, sys\n'
-        'with open(os.environ["CALL_LOG"], "a") as f: f.write(json.dumps(sys.argv[1:])+"\\n")\n'
-        'print(os.environ.get("CTL_OUTPUT", ""))\n'
-        'sys.exit(int(os.environ.get("CTL_EXIT", "0")))\n')
-    executable.chmod(0o700)
-    monkeypatch.setenv('PATH', str(tmp_path))
-    monkeypatch.setenv('CALL_LOG', str(log))
+    # In-process fake on every platform. The child no longer inherits the parent
+    # PATH, so a fake executable planted on PATH is (correctly) never found.
+    import os
+    from custodian import service
+    calls = []
+    def run(args, **kwargs):
+        assert args[0] == 'systemctl'
+        assert not set(kwargs['env']) & {'CTL_EXIT', 'CTL_OUTPUT', 'XDG_CONFIG_HOME'}
+        calls.append(args[1:])
+        return service.subprocess.CompletedProcess(args, int(os.environ.get('CTL_EXIT', '0')),
+            stdout=os.environ.get('CTL_OUTPUT', '') + '\n', stderr='')
+    monkeypatch.setattr(service.subprocess, 'run', run)
     monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'config'))
-    return tmp_path, lambda: [json.loads(line) for line in log.read_text().splitlines()]
+    return tmp_path, lambda: calls
 
 
 @pytest.mark.skipif(__import__("os").name == "nt", reason="Linux unit installation requires POSIX descriptor chmod")

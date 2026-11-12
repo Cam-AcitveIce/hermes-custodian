@@ -231,6 +231,35 @@ def test_process_is_running_as_current_user_macos_branch(monkeypatch):
     assert pmod.process_is_running_as_current_user(os.getpid()) is False
 
 
+def test_macos_ps_runner_gets_explicit_minimal_environment(monkeypatch):
+    import custodian._platform.posix as pmod
+    monkeypatch.setattr(pmod, 'NAME', 'macos')
+    # Fixture markers only; no real credential is read.
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'fixture-not-a-real-key')
+    monkeypatch.setenv('HTTPS_PROXY', 'http://fixture-user:fixture-pass@proxy.invalid:8080')
+    monkeypatch.setenv('DYLD_INSERT_LIBRARIES', '/fixture/unsafe/insert.dylib')
+    monkeypatch.setenv('LD_PRELOAD', '/fixture/unsafe/preload.so')
+    monkeypatch.setenv('PYTHONPATH', '/fixture/unsafe/pythonpath')
+    monkeypatch.setenv('PATH', '/fixture/unsafe/bin')
+    monkeypatch.setenv('HOME', '/Users/fixture')
+    seen = []
+
+    class Done:
+        returncode = 0
+        stdout = f'{os.getuid()}\n'
+
+    def runner(args, **kwargs):
+        seen.append((args, kwargs))
+        return Done()
+
+    monkeypatch.setattr(pmod, '_ps_runner', runner)
+    assert pmod.process_is_running_as_current_user(os.getpid()) is True
+    args, kwargs = seen[0]
+    assert args == ['ps', '-o', 'uid=', '-p', str(os.getpid())]
+    assert kwargs['env'] == {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL': 'C', 'LANG': 'C'}
+    assert not kwargs.get('shell')
+
+
 def test_terminate_signals():
     import signal
     sigs = posix.terminate_signals()

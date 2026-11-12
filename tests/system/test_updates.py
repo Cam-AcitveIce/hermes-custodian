@@ -7,27 +7,19 @@ import pytest
 
 @pytest.fixture
 def fake_apt(tmp_path, monkeypatch):
-    if __import__('os').name == 'nt':
-        import os
-        from custodian import updates
-        calls = []
-        def run(args, **kwargs):
-            assert args == ['apt', 'list', '--upgradable']
-            calls.append({'args': args[1:], 'locale': kwargs['env']['LC_ALL']})
-            return updates.subprocess.CompletedProcess(args, int(os.environ.get('APT_EXIT', '0')),
-                stdout=os.environ.get('APT_OUTPUT', 'Listing...') + '\n', stderr='')
-        monkeypatch.setattr(updates.subprocess, 'run', run)
-        return lambda: calls[-1]
-    executable = tmp_path / 'apt'
-    log = tmp_path / 'apt.json'
-    executable.write_text('#!' + sys.executable + '\nimport os, sys, json\n'
-        'with open(os.environ["APT_LOG"], "w") as f: json.dump({"args":sys.argv[1:], "locale":os.environ.get("LC_ALL")}, f)\n'
-        'print(os.environ.get("APT_OUTPUT", "Listing..."))\n'
-        'sys.exit(int(os.environ.get("APT_EXIT", "0")))\n')
-    executable.chmod(0o700)
-    monkeypatch.setenv('PATH', str(tmp_path))
-    monkeypatch.setenv('APT_LOG', str(log))
-    return lambda: json.loads(log.read_text())
+    # In-process fake on every platform. The child no longer inherits the parent
+    # PATH, so a fake executable planted on PATH is (correctly) never found.
+    import os
+    from custodian import updates
+    calls = []
+    def run(args, **kwargs):
+        assert args == ['apt', 'list', '--upgradable']
+        assert not set(kwargs['env']) & {'APT_EXIT', 'APT_OUTPUT'}
+        calls.append({'args': args[1:], 'locale': kwargs['env']['LC_ALL']})
+        return updates.subprocess.CompletedProcess(args, int(os.environ.get('APT_EXIT', '0')),
+            stdout=os.environ.get('APT_OUTPUT', 'Listing...') + '\n', stderr='')
+    monkeypatch.setattr(updates.subprocess, 'run', run)
+    return lambda: calls[-1]
 
 
 def test_detects_native_cached_upgrades_without_refresh(fake_apt, monkeypatch):

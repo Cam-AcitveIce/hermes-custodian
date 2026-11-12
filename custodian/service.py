@@ -4,6 +4,7 @@ import os
 import plistlib
 import subprocess
 from custodian._platform import NAME
+from ._subprocess_env import minimal_env, windows_system_executable
 
 UNIT_NAME = 'hermes-custodian.service'
 MACOS_LABEL = 'com.hermes.custodian'
@@ -19,7 +20,7 @@ def _systemctl(*args: str) -> dict:
     try:
         child = subprocess.run(['systemctl', '--user', *args], capture_output=True,
                                text=True, timeout=15, check=False,
-                               env={**os.environ, 'LC_ALL': 'C', 'LANG': 'C'})
+                               env=minimal_env('systemctl-user'))
         return {'ok': child.returncode == 0, 'returncode': child.returncode,
                 'stdout': child.stdout.strip(), 'stderr': child.stderr.strip()}
     except FileNotFoundError:
@@ -207,7 +208,7 @@ def _launchctl(*args: str) -> dict:
     try:
         child = subprocess.run(['launchctl', *args], capture_output=True,
                                text=True, timeout=15, check=False,
-                               env={**os.environ, 'LC_ALL': 'C', 'LANG': 'C'})
+                               env=minimal_env('launchctl'))
         return {'ok': child.returncode == 0, 'returncode': child.returncode,
                 'stdout': child.stdout.strip(), 'stderr': child.stderr.strip()}
     except FileNotFoundError:
@@ -365,7 +366,9 @@ def build_schtasks_create_argv(python_executable: Path, state_dir: Path, enable:
 def _schtasks(*args: str) -> dict:
     try:
         child = subprocess.run(['schtasks.exe', *args], capture_output=True,
-                               text=True, timeout=15, check=False)
+                               text=True, timeout=15, check=False,
+                               executable=windows_system_executable('schtasks.exe'),
+                               env=minimal_env('schtasks'))
         return {'ok': child.returncode == 0, 'returncode': child.returncode,
                 'stdout': child.stdout.strip(), 'stderr': child.stderr.strip()}
     except FileNotFoundError:

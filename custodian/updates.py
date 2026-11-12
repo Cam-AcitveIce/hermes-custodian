@@ -13,6 +13,7 @@ import secrets
 from contextlib import contextmanager
 from pathlib import Path
 from custodian._platform import NAME
+from ._subprocess_env import minimal_env, windows_system_executable
 
 
 _POLICY_NAME = '99hermes-custodian-security'
@@ -327,8 +328,7 @@ def _native_policy_query(argv: list[str]) -> str:
         raise ValueError('Only fixed read-only native policy queries are allowed')
     try:
         child = subprocess.run(argv, capture_output=True, text=True, timeout=15,
-                               check=False, env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin',
-                                                 'LC_ALL': 'C', 'LANG': 'C'})
+                               check=False, env=minimal_env('native-policy'))
     except subprocess.TimeoutExpired as exc:
         raise OSError('Native policy query timed out') from exc
     if child.returncode:
@@ -401,7 +401,7 @@ def _check_updates_linux() -> dict:
     try:
         child = subprocess.run(['apt', 'list', '--upgradable'], capture_output=True,
                                text=True, timeout=30, check=False,
-                               env={**os.environ, 'LC_ALL': 'C', 'LANG': 'C'})
+                               env=minimal_env('apt'))
     except OSError as exc:
         return _failure('unavailable', str(exc))
     except subprocess.TimeoutExpired:
@@ -439,7 +439,7 @@ def _check_updates_macos() -> dict:
     try:
         child = subprocess.run(['softwareupdate', '-l'], capture_output=True,
                                text=True, timeout=60, check=False,
-                               env={**os.environ, 'LC_ALL': 'C', 'LANG': 'C'})
+                               env=minimal_env('softwareupdate'))
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {'status': 'unavailable', 'backend': 'softwareupdate', 'cache_only': True,
                 'cache_freshness': 'unknown', 'error': str(exc), 'packages': [],
@@ -502,7 +502,9 @@ def _check_updates_windows() -> dict:
         child = subprocess.run([
             'powershell.exe', '-NoProfile', '-NonInteractive',
             '-ExecutionPolicy', 'Bypass', '-Command', _WIN_UPDATE_SCRIPT
-        ], capture_output=True, text=True, timeout=90, check=False)
+        ], capture_output=True, text=True, timeout=90, check=False,
+            executable=windows_system_executable('powershell.exe'),
+            env=minimal_env('powershell'))
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {'status': 'unavailable', 'backend': 'windowsupdate', 'cache_only': True,
                 'cache_freshness': 'unknown', 'error': str(exc), 'packages': [],

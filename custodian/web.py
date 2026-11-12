@@ -1,4 +1,4 @@
-"""Loopback-only authenticated read-only web dashboard for Hermes Custodian."""
+"""Loopback-only authenticated read-only web dashboard for Hermes Security Warden."""
 
 from __future__ import annotations
 
@@ -276,7 +276,7 @@ def _compute_coverage_summary(
         state = "unconfigured"
         label = "UNCONFIGURED"
         degraded = True
-        reason = "Custodian is not configured yet. Run 'custodian setup' via CLI/TUI to select monitored roots."
+        reason = "Hermes Security Warden is not configured yet. Run 'custodian setup' via CLI/TUI to select monitored roots."
     elif raw_state == "not_scanned" or last_scan is None:
         state = "not_scanned"
         label = "NOT SCANNED"
@@ -446,7 +446,7 @@ def _collect_consented_inventory(
             "discovery_approved": False,
             "consented_roots": [],
             "profiles": [],
-            "explanation": "Custodian is not configured; run setup first.",
+            "explanation": "Hermes Security Warden is not configured; run setup first.",
             "privacy_notice": "Discovery not approved in setup. Private memory, history, SOUL, and credentials are never read.",
         }
 
@@ -1235,7 +1235,7 @@ def run_dashboard(
     out = output if output is not None else sys.stdout
     srv = make_server(engine, host=host, port=port, auth=auth)
     try:
-        out.write(f"Hermes Custodian Dashboard URL: {srv.base_url}\n")
+        out.write(f"Hermes Security Warden Dashboard URL: {srv.base_url}\n")
         out.flush()
         if _on_ready is not None:
             _on_ready(srv)

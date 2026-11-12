@@ -4,8 +4,8 @@ description: Local, scoped security-posture monitoring with terminal setup and a
 author: Cam-AcitveIce
 requires_hermes: '>=0.23.1'
 provides_tools:
-  - custodian_status
-  - custodian_findings
-  - custodian_changes
-  - custodian_scan
+  - warden_status
+  - warden_findings
+  - warden_changes
+  - warden_scan
 provides_hooks: []

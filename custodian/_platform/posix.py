@@ -10,8 +10,9 @@ import stat
 import subprocess
 import sys
 import time
+from .._subprocess_env import minimal_env
 
-NAME = 'macos' if sys.platform == 'darwin' else 'linux'
+NAME ='macos' if sys.platform == 'darwin' else 'linux'
 
 try:
     import fcntl
@@ -259,7 +260,8 @@ def process_is_running_as_current_user(pid: int) -> bool:
     if is_macos:
         try:
             res = _ps_runner(['ps', '-o', 'uid=', '-p', str(pid)],
-                             capture_output=True, text=True, timeout=5.0)
+                             capture_output=True, text=True, timeout=5.0,
+                             env=minimal_env('ps'))
             if res.returncode != 0:
                 return False
             output = res.stdout.strip()

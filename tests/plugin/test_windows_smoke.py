@@ -61,7 +61,7 @@ def test_windows_simulation_missing_backend_fallback_smoke(monkeypatch, tmp_path
         ctx = FakeContext()
         plugin.register(ctx)
 
-        assert set(ctx.tools) == {'custodian_status', 'custodian_findings', 'custodian_changes', 'custodian_scan'}
+        assert set(ctx.tools) == {'warden_status', 'warden_findings', 'warden_changes', 'warden_scan'}
 
         for tool_name, tool_def in ctx.tools.items():
             handler = tool_def['handler']
@@ -109,7 +109,7 @@ def test_windows_simulation_backend_import(monkeypatch):
         plugin = _load_plugin_module()
         ctx = FakeContext()
         plugin.register(ctx)
-        assert set(ctx.tools) == {'custodian_status', 'custodian_findings', 'custodian_changes', 'custodian_scan'}
+        assert set(ctx.tools) == {'warden_status', 'warden_findings', 'warden_changes', 'warden_scan'}
     finally:
         # Undo simulated module entries before restoring the native module graph.
         monkeypatch.undo()
@@ -136,7 +136,7 @@ def test_real_os_smoke(monkeypatch, tmp_path):
     ctx = FakeContext()
     plugin.register(ctx)
 
-    assert set(ctx.tools) == {'custodian_status', 'custodian_findings', 'custodian_changes', 'custodian_scan'}
+    assert set(ctx.tools) == {'warden_status', 'warden_findings', 'warden_changes', 'warden_scan'}
 
     for tool_name, tool_def in ctx.tools.items():
         handler = tool_def['handler']
@@ -170,15 +170,21 @@ def test_windows_native_plugin_smoke(monkeypatch, tmp_path):
     ctx = FakeContext()
     plugin.register(ctx)
 
-    assert set(ctx.tools) == {'custodian_status', 'custodian_findings', 'custodian_changes', 'custodian_scan'}
+    assert set(ctx.tools) == {'warden_status', 'warden_findings', 'warden_changes', 'warden_scan'}
 
-    scan_handler = ctx.tools['custodian_scan']['handler']
+    assert not any(name.startswith('custodian_') for name in ctx.tools)
+
+    scan_handler = ctx.tools['warden_scan']['handler']
     scan_result = json.loads(scan_handler({}))
-    assert scan_result['ok'] is True, f"custodian_scan returned ok=False: {scan_result}"
-    assert scan_result.get('status') != 'unsupported', f"custodian_scan returned unsupported: {scan_result}"
+    assert scan_result['ok'] is True, f"warden_scan returned ok=False: {scan_result}"
+    assert scan_result.get('status') != 'unsupported', f"warden_scan returned unsupported: {scan_result}"
     assert 'data' in scan_result
 
-    for tool_name in ('custodian_status', 'custodian_findings', 'custodian_changes'):
+    for tool_name in ('warden_scan', 'warden_status'):
+        rejected = json.loads(ctx.tools[tool_name]['handler']({'watched_paths': [str(tmp_path)]}))
+        assert rejected['ok'] is False and rejected['status'] == 'error', rejected
+
+    for tool_name in ('warden_status', 'warden_findings', 'warden_changes'):
         handler = ctx.tools[tool_name]['handler']
         raw = handler({})
         result = json.loads(raw)

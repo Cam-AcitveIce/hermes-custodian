@@ -1,4 +1,4 @@
-/* Hermes Custodian — Read-Only Posture Console (Faithful v1) */
+/* Hermes Security Warden — Read-Only Posture Console (Faithful v1) */
 (function (root) {
   "use strict";
 
@@ -25,7 +25,7 @@
     },
     health: {
       title: "System Health",
-      subtitle: "Custodian monitor service heartbeat and cached OS updates"
+      subtitle: "Warden monitor service heartbeat and cached OS updates"
     }
   };
 
@@ -293,7 +293,7 @@
     const rawCovState = String(cov.state || (configured ? "complete" : "unconfigured")).toLowerCase();
     const covState = (rawCovState === "complete" || rawCovState === "heal" + "thy") ? "complete" : rawCovState;
     const isCovComplete = covState === "complete" && Boolean(cov.complete !== false && (!lastScan || lastScan.complete !== false));
-    const covReason = String(cov.reason || (configured ? "" : "Custodian is not configured yet. Run 'custodian setup' via terminal to select monitored roots."));
+    const covReason = String(cov.reason || (configured ? "" : "Hermes Security Warden is not configured yet. Run 'custodian setup' via terminal to select monitored roots."));
     const filesChecked = Number(cov.files_checked || (lastScan ? lastScan.files_checked : 0) || 0);
     const maxFiles = Number(cov.max_files || (adaptedSettings ? adaptedSettings.max_files : 0) || (sp.max_files || 0));
 
@@ -313,7 +313,7 @@
       if (!isCovComplete || !monitoring) {
         verdictDetail = covReason || (monitoring ? "Scan coverage is incomplete." : "Monitor service is stopped.");
       } else {
-        verdictDetail = "Sensitive configuration or credential paths have permissive filesystem modes or unfollowed symlinks. Custodian never changes files itself.";
+        verdictDetail = "Sensitive configuration or credential paths have permissive filesystem modes or unfollowed symlinks. Warden never changes files itself.";
       }
     } else if (!isCovComplete || !monitoring) {
       verdictCode = "CAN'T VOUCH";
@@ -1459,7 +1459,7 @@
   function showRefreshError(msg) {
     const banner = document.getElementById("refresh-error-banner");
     const text = document.getElementById("refresh-error-text");
-    if (text) text.textContent = msg || "Unable to reach Custodian API. Last observed posture is shown.";
+    if (text) text.textContent = msg || "Unable to reach the Warden API. Last observed posture is shown.";
     if (banner) banner.classList.remove("is-hidden");
   }
 

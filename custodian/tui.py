@@ -14,7 +14,7 @@ class SetupScreen(Screen):
         yield Header()
         with VerticalScroll(id='setup-body'):
             yield Label('YOUR DEVICE. YOUR BOUNDARIES.', classes='eyebrow')
-            yield Label('Set up Custodian', classes='title')
+            yield Label('Set up Hermes Security Warden', classes='title')
             yield Static('Choose exactly what I may inspect. Monitoring is local, read-only, and uses no AI calls.', classes='muted')
             yield Label('1 / Find your Hermes profiles')
             yield Input(value=str(Path(os.environ.get('HERMES_HOME', Path.home() / '.hermes'))), placeholder='Hermes root directory', id='hermes-root')
@@ -158,7 +158,7 @@ class ControlScreen(Screen):
 
 
 class CustodianApp(App):
-    TITLE = 'Custodian'
+    TITLE = 'Hermes Security Warden'
     SUB_TITLE = 'Local. Scoped. Under your control.'
     BINDINGS = [('q', 'quit', 'Quit'), ('ctrl+c', 'quit', 'Quit')]
     CSS = '''

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'">
-  <title>Hermes Custodian</title>
+  <title>Hermes Security Warden</title>
   <link rel="stylesheet" href="styles.css">
   <script src="app.js" defer></script>
 </head>
@@ -21,7 +21,7 @@
           </svg>
         </div>
         <div class="brand-text">
-          <span class="brand-title">Hermes Custodian</span>
+          <span class="brand-title">Hermes Security Warden</span>
           <span class="brand-sub">READ-ONLY POSTURE</span>
         </div>
         <button type="button" id="sidebar-collapse-btn" class="icon-btn sidebar-toggle" aria-label="Toggle compact sidebar" title="Toggle sidebar width">
@@ -130,7 +130,7 @@
           </svg>
           <div class="stopped-banner-copy">
             <strong class="stopped-banner-title">Refresh failed</strong>
-            <span id="refresh-error-text">Unable to reach Custodian API. Last observed posture is shown.</span>
+            <span id="refresh-error-text">Unable to reach the Warden API. Last observed posture is shown.</span>
           </div>
         </div>
       </div>
@@ -177,7 +177,7 @@
             </svg>
             <div class="verdict-pill is-warn">CAN'T VOUCH</div>
             <h2 id="empty-title" class="empty-title">Not set up yet</h2>
-            <p id="empty-desc" class="empty-desc">Hermes Custodian is not configured yet. Run 'custodian setup' in a terminal to select watched roots.</p>
+            <p id="empty-desc" class="empty-desc">Hermes Security Warden is not configured yet. Run 'custodian setup' in a terminal to select watched roots.</p>
             <div id="empty-meta" class="empty-meta mono">Run 'custodian setup' in a terminal</div>
           </div>
         </section>
@@ -402,7 +402,7 @@
               </div>
               <div class="health-note">
                 <p id="health-updates-summary"><strong>Security classification unknown:</strong> packages in cached lists have unknown classification.</p>
-                <p class="health-policy">Custodian never installs updates.</p>
+                <p class="health-policy">Warden never installs updates.</p>
               </div>
               <div class="table-wrap">
                 <table class="data-table" aria-label="Upgradable packages">
@@ -530,7 +530,7 @@
     </button>
   </nav>
 
-  <section id="login-screen" class="login-overlay is-hidden" aria-label="Sign in to Hermes Custodian">
+  <section id="login-screen" class="login-overlay is-hidden" aria-label="Sign in to Hermes Security Warden">
     <div class="login-card">
       <div class="login-brand">
         <div class="brand-mark" aria-hidden="true">
@@ -540,7 +540,7 @@
           </svg>
         </div>
         <div>
-          <h2 class="login-title">Hermes Custodian</h2>
+          <h2 class="login-title">Hermes Security Warden</h2>
           <p class="login-sub">Local read-only posture console</p>
         </div>
       </div>
