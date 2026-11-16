@@ -15,7 +15,7 @@ Setup is a guided first run. See [Installation and setup](#installation-and-setu
 
 Naming: Hermes Security Warden is the display name, and the agent tools are `warden_*`. The plugin/catalog ID (`hermes-custodian`), the Python package (`custodian`), CLI (`warden`, with a legacy `custodian` alias), the state folder and the service identifiers keep their existing names, so nothing needs migrating. The earlier `custodian_*` tool names are gone, with no aliases.
 
-Status: release candidate. The automated suite passes on GitHub-hosted Linux, macOS and Windows runners with Python 3.11, 3.12, 3.13 and 3.14, including native Windows plugin-tool and dashboard/discovery workflows. A hands-on installation on a user's Windows machine remains recommended. No antivirus, exploit detection or tamper-proof sandbox claim.
+Status: 0.1.1 release candidate. The released 0.1.0 baseline was tested on GitHub-hosted Linux, macOS and Windows runners with Python 3.11, 3.12, 3.13 and 3.14, including native Windows plugin-tool and dashboard/discovery workflows. The new onboarding and bare-launcher changes need fresh native CI at the release commit; earlier matrix results do not verify this candidate. The accompanying Hermes installer change is also unreleased. No antivirus, exploit detection or tamper-proof sandbox claim.
 
 ## Screenshots
 
