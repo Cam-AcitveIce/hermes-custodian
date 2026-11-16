@@ -42,6 +42,18 @@ def _answers(monkeypatch, inputs, passwords):
     return asked
 
 
+def test_native_setup_followup_uses_the_invoked_command(monkeypatch, tmp_path, capsys):
+    import argparse
+    state = tmp_path / 'state'
+    _interactive(monkeypatch)
+    _fake_tui(monkeypatch, state, finishes_setup=True)
+    _answers(monkeypatch, ['n'], [])
+    parser = cli.configure_parser(argparse.ArgumentParser(prog='hermes warden'))
+    args = parser.parse_args(['--state-dir', str(state), 'setup'])
+    assert cli.run_command(args, parser) == 0
+    assert 'hermes warden dashboard-credentials' in capsys.readouterr().out
+
+
 def test_setup_offers_dashboard_login_and_saves_it_when_accepted(monkeypatch, tmp_path, capsys):
     state = tmp_path / 'state'
     _interactive(monkeypatch)
@@ -62,7 +74,7 @@ def test_declining_leaves_no_login_and_says_how_to_set_it_later(monkeypatch, tmp
     _answers(monkeypatch, ['n'], [])
     assert cli.main(['--state-dir', str(state), 'setup']) == 0
     assert not DashboardAuth(state).configured()
-    assert 'custodian dashboard-credentials' in capsys.readouterr().out
+    assert 'warden dashboard-credentials' in capsys.readouterr().out
 
 
 def test_no_prompt_when_login_already_configured(monkeypatch, tmp_path):
@@ -94,4 +106,4 @@ def test_mismatched_passwords_keep_scope_but_report_failure(monkeypatch, tmp_pat
     assert cli.main(['--state-dir', str(state), 'setup']) == 1
     assert Engine(state).status()['configured']
     assert not DashboardAuth(state).configured()
-    assert 'custodian dashboard-credentials' in capsys.readouterr().err
+    assert 'warden dashboard-credentials' in capsys.readouterr().err

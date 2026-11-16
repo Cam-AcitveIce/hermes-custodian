@@ -13,9 +13,9 @@ Hermes Security Warden is a quiet watcher for the device your agent lives on. It
 
 Setup is a guided first run. See [Installation and setup](#installation-and-setup).
 
-Naming: Hermes Security Warden is the display name, and the agent tools are `warden_*`. The plugin/catalog ID (`hermes-custodian`), the Python package and CLI (`custodian`), the state folder and the service identifiers keep their existing names, so nothing needs migrating. The earlier `custodian_*` tool names are gone, with no aliases.
+Naming: Hermes Security Warden is the display name, and the agent tools are `warden_*`. The plugin/catalog ID (`hermes-custodian`), the Python package (`custodian`), CLI (`warden`, with a legacy `custodian` alias), the state folder and the service identifiers keep their existing names, so nothing needs migrating. The earlier `custodian_*` tool names are gone, with no aliases.
 
-Status: release candidate. The automated suite passes on GitHub-hosted Linux, macOS and Windows runners with Python 3.11, 3.12, 3.13 and 3.14, including native Windows plugin-tool and dashboard/discovery workflows. A hands-on installation on a user's Windows machine remains recommended. No antivirus, exploit detection or tamper-proof sandbox claim.
+Status: 0.1.1 release candidate. The released 0.1.0 baseline was tested on GitHub-hosted Linux, macOS and Windows runners with Python 3.11, 3.12, 3.13 and 3.14, including native Windows plugin-tool and dashboard/discovery workflows. The new onboarding and bare-launcher changes need fresh native CI at the release commit; earlier matrix results do not verify this candidate. The accompanying Hermes installer change is also unreleased. No antivirus, exploit detection or tamper-proof sandbox claim.
 
 ## Screenshots
 
@@ -44,26 +44,42 @@ Captured from the installed package using synthetic fixture data only (paths ali
 
 ## Installation and setup
 
-### Current marketplace release: installation notice
+Python 3.11+ is required. This branch adds an installer-owned `warden` terminal command using Hermes's proposed `shell_commands` support.
 
-The plugin is listed in the [Hermes marketplace](https://hermes-agent.nousresearch.com/marketplace/hermes-custodian) as `hermes-custodian`:
+**Release status:** the current marketplace pin is still 0.1.0, which does not expose a standalone terminal command. The bare-command integration requires the accompanying Hermes installer change; it must be released upstream before this branch is advertised as compatible with a released Hermes version. The catalog pin and minimum Hermes version will be updated together after that gate.
+
+With a Hermes build containing launcher support, the end-user flow is:
 
 ```sh
 hermes plugins install hermes-custodian
+warden setup
 ```
 
-Known packaging issue in catalog version **0.1.0**: this installs the Hermes plugin, but does not make the standalone `custodian` command available on the terminal PATH. If `custodian setup` returns “command not found”, that does not by itself mean the agent plugin failed to install.
+Accept the dependency preparation and enablement prompts. The installer prepares the setup interface and reports `Terminal command ready: warden`. There is no separate installer, manual pip command, venv activation or shell alias. Subsequent launches are direct commands:
 
-The intended replacement flow is marketplace install followed by bare `warden setup`, `warden status`, and `warden scan`, with no manual venv activation. Installer-owned launcher support is being developed; **that flow is not shipped in the current marketplace release yet**. A package rename or README edit alone does not fix launcher delivery. The standalone development instructions below are the current fallback, not the intended final marketplace onboarding.
+```sh
+warden scan
+warden status
+warden findings
+warden dashboard
+```
 
-Python 3.11+ is required. Use the Python environment belonging to the Hermes installation that will load the plugin. The source/plugin entrypoint and the standalone CLI share one implementation; there is no separate Windows plugin or privileged agent process.
+The launcher is bound to the profile used at installation. For a named profile, install with `hermes -p work plugins install hermes-custodian`, then use the same bare commands. An existing command belonging to another app or profile is never overwritten. One global command name has one profile owner; uninstalling that owner's plugin removes only its unmodified installer-owned launcher.
+
+Installation and setup do not start monitoring or install a background service. Discovery, saved scope, monitor startup and service persistence each retain their explicit consent. Shell-command dispatch uses the managed package entrypoint and does not require in-process loading of the agent plugin; do not weaken `plugins.isolation` to expose a command.
+
+The optional `hermes warden` interface remains a fallback for normal in-process plugin loading, not the intended bare-command workflow. The standalone package keeps `custodian` as a compatibility alias; package/repository/state/service identifiers remain `hermes-custodian`/`custodian` so existing state needs no migration.
+
+### Optional standalone development installation
+
+These instructions are for developers who want a standalone CLI, not a prerequisite for marketplace users.
 
 Linux / macOS, from this checkout:
 
 ```sh
 python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[tui]'
-.venv/bin/custodian setup
+.venv/bin/warden setup
 ```
 
 Windows PowerShell, from this checkout (no activation or execution-policy change required):
@@ -71,40 +87,40 @@ Windows PowerShell, from this checkout (no activation or execution-policy change
 ```powershell
 py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[tui]"
-.\.venv\Scripts\custodian.exe setup
+.\.venv\Scripts\warden.exe setup
 ```
 
-These create an isolated CLI environment; they do not register the Hermes plugin automatically. For local plugin loading, follow your Hermes version's `hermes plugins install --help` and use the source directory containing `plugin.yaml` and `__init__.py`. A wheel installs the standalone CLI and its assets, not the repository-root Hermes entrypoint.
+These create an isolated CLI environment; they do not register the Hermes plugin automatically. A wheel installs the standalone CLI and its assets, not the repository-root Hermes entrypoint. Marketplace users should use the managed install above instead.
 
 When using a named Hermes profile, set `HERMES_HOME` to that profile before setup and subsequent CLI launches so the agent tools and the app use the same state. First-run setup asks for discovery/scope consent and offers to create the dashboard login; it does not install or start a background service. Choose only the paths you want monitored, save, and run a scan. The TUI and dashboard show the same findings and history as the agent tools.
 
 CLI commands (use the `.venv` executable path above if the environment is not activated):
 
 ```sh
-custodian setup
-custodian tui
-custodian scan
-custodian status
-custodian findings
-custodian events
-custodian monitor
-custodian dashboard
-custodian updates
-custodian updates security-plan --enable
-custodian updates security-plan --disable
-custodian updates security-apply --plan-id <PLAN_ID> --enable
-custodian service status
-custodian service install --enable
-custodian service start
-custodian service stop
-custodian service uninstall
+warden setup
+warden tui
+warden scan
+warden status
+warden findings
+warden events
+warden monitor
+warden dashboard
+warden updates
+warden updates security-plan --enable
+warden updates security-plan --disable
+warden updates security-apply --plan-id <PLAN_ID> --enable
+warden service status
+warden service install --enable
+warden service start
+warden service stop
+warden service uninstall
 ```
 
-Setup/TUI require a real interactive terminal. Unattended launches do not hang on an onboarding prompt. Monitoring and dashboard operation require completed setup. Service installation and enablement do not start the workload implicitly; use `custodian service start` to start the installed unit explicitly. User services start with the user manager; boot-before-login persistence is not promised without administrator-managed user-manager lifecycle. `custodian updates security-plan --enable|--disable` previews native Debian/Ubuntu security-only `unattended-upgrades` policy (`Automatic-Reboot "false"`) without writing files. `custodian updates security-apply --plan-id <PLAN_ID>` is admin-only: it requires real and effective root (`uid=0, euid=0`) running from a root-owned installation (never `sudo` from a user-writable checkout/venv), re-verifies `plan_id`, prompts interactively on the terminal for `'APPLY SECURITY POLICY ' + PLAN_ID` (no `--yes`/`--approve` flags), and is never exposed through AI plugin tools or the web dashboard. Live root policy application and reboot behaviour were not executed in test verification.
+Setup/TUI require a real interactive terminal. Unattended launches do not hang on an onboarding prompt. Monitoring and dashboard operation require completed setup. Service installation and enablement do not start the workload implicitly; use `warden service start` to start the installed unit explicitly. User services start with the user manager; boot-before-login persistence is not promised without administrator-managed user-manager lifecycle. `warden updates security-plan --enable|--disable` previews native Debian/Ubuntu security-only `unattended-upgrades` policy (`Automatic-Reboot "false"`) without writing files. `warden updates security-apply --plan-id <PLAN_ID>` is admin-only: it requires real and effective root (`uid=0, euid=0`) running from a root-owned installation (never `sudo` from a user-writable checkout/venv), re-verifies `plan_id`, prompts interactively on the terminal for `'APPLY SECURITY POLICY ' + PLAN_ID` (no `--yes`/`--approve` flags), and is never exposed through AI plugin tools or the web dashboard. Live root policy application and reboot behaviour were not executed in test verification.
 
 When launched with `HERMES_HOME`, state follows that profile under `plugin-data/hermes-custodian/`. Otherwise the standalone CLI uses `$XDG_STATE_HOME/hermes-custodian` (fallback `~/.local/state/hermes-custodian`) on Linux, `~/Library/Application Support/hermes-custodian` on macOS, or `%LOCALAPPDATA%\hermes-custodian` on Windows. Use the global `--state-dir /absolute/path` option before the command to select an explicit state directory. Keep each profile's ownership and scope deliberate. The plugin never automatically opens another profile's state.
 
-The web dashboard binds to 127.0.0.1 only and signs in with a username and password you set once, like Hermes's own basic dashboard login. First-run `custodian setup` offers to create it when you finish; set or reset it any time with `custodian dashboard-credentials` (masked prompts, never a command-line flag, minimum 12 characters). Only a salted scrypt verifier is stored, in a private file in the state directory; sessions expire, are bound to the current password, and failed logins are rate-limited. This is a single shared local login with no MFA, intended for loopback use. For remote access, use SSH forwarding; no public listener or tunnel is installed.
+The web dashboard binds to 127.0.0.1 only and signs in with a username and password you set once, like Hermes's own basic dashboard login. First-run `warden setup` offers to create it when you finish; set or reset it any time with `warden dashboard-credentials` (masked prompts, never a command-line flag, minimum 12 characters). Only a salted scrypt verifier is stored, in a private file in the state directory; sessions expire, are bound to the current password, and failed logins are rate-limited. This is a single shared local login with no MFA, intended for loopback use. For remote access, use SSH forwarding; no public listener or tunnel is installed.
 
 ## Scope and limitations
 

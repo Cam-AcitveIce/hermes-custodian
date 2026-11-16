@@ -38,28 +38,28 @@ def _set_dashboard_login(state_dir):
     print('Dashboard login saved. Password-reset sessions are invalidated on their next request.')
 
 
-def _offer_dashboard_login(state_dir):
+def _offer_dashboard_login(state_dir, command_prefix='warden'):
     """After first-run setup, offer the dashboard login once so a new user is never left guessing."""
     from .dashboard_auth import DashboardAuth
     from .engine import Engine
     if not Engine(state_dir).status().get('configured') or DashboardAuth(state_dir).configured():
         return 0
-    answer = input('Set a dashboard login now? Used to sign in to `custodian dashboard`. [Y/n] ').strip().lower()
+    answer = input(f'Set a dashboard login now? Used to sign in to `{command_prefix} dashboard`. [Y/n] ').strip().lower()
     if answer in ('n', 'no'):
-        print('Skipped. Set it any time with: custodian dashboard-credentials')
+        print(f'Skipped. Set it any time with: {command_prefix} dashboard-credentials')
         return 0
     try:
         _set_dashboard_login(state_dir)
     except (ValueError, OSError) as exc:
-        print(f'Custodian: {exc}. Your scope is saved; set the dashboard login with: custodian dashboard-credentials', file=sys.stderr)
+        print(f'Custodian: {exc}. Your scope is saved; set the dashboard login with: {command_prefix} dashboard-credentials', file=sys.stderr)
         return 1
     return 0
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(prog='custodian', description='Local security monitoring. Your scope. Your decisions.')
-    parser.add_argument('--state-dir', type=Path, default=default_state_dir())
-    subs = parser.add_subparsers(dest='command', required=True)
+def configure_parser(parser, *, state_dir=None):
+    """Share the complete command tree with the native Hermes CLI surface."""
+    parser.add_argument('--state-dir', type=Path, default=default_state_dir() if state_dir is None else state_dir)
+    subs = parser.add_subparsers(dest='custodian_command', required=True)
     subs.add_parser('dashboard-credentials', help='Set or reset local dashboard username/password using masked terminal prompts')
     for name, help_text in [('setup', 'Configure consent and scope in the setup TUI'), ('tui', 'Open the terminal control centre'), ('scan', 'Run a bounded scan of approved paths'), ('status', 'Show monitoring health and coverage'), ('findings', 'Show evidence-backed findings'), ('events', 'Show recent changes'), ('monitor', 'Run the foreground monitoring workload'), ('dashboard', 'Launch an authenticated loopback dashboard'), ('updates', 'Check native OS updates without applying them')]:
         cmd = subs.add_parser(name, help=help_text)
@@ -81,24 +81,33 @@ def main(argv=None):
     svc = subs.add_parser('service', help='Explicit user-service lifecycle management')
     svc.add_argument('action', choices=['install', 'start', 'status', 'stop', 'uninstall'])
     svc.add_argument('--enable', action='store_true', help='Explicitly enable the installed service at user startup')
-    args = parser.parse_args(argv)
-    if args.command in ('setup', 'tui', 'dashboard-credentials') and not (sys.stdin.isatty() and sys.stdout.isatty()):
+    return parser
+
+
+def main(argv=None):
+    parser = configure_parser(argparse.ArgumentParser(prog='warden', description='Local security monitoring. Your scope. Your decisions.'))
+    return run_command(parser.parse_args(argv), parser)
+
+
+def run_command(args, parser):
+    """Execute an explicitly invoked terminal command, never on plugin import."""
+    if args.custodian_command in ('setup', 'tui', 'dashboard-credentials') and not (sys.stdin.isatty() and sys.stdout.isatty()):
         parser.error('setup/tui/dashboard-credentials requires an interactive terminal; unattended launches never open a wizard')
     try:
-        if args.command == 'dashboard-credentials':
+        if args.custodian_command == 'dashboard-credentials':
             _set_dashboard_login(args.state_dir)
             return 0
-        if args.command in ('setup', 'tui'):
+        if args.custodian_command in ('setup', 'tui'):
             from .tui import CustodianApp
-            CustodianApp(args.state_dir, force_setup=args.command == 'setup').run()
-            return _offer_dashboard_login(args.state_dir)
-        if args.command == 'service':
+            CustodianApp(args.state_dir, force_setup=args.custodian_command == 'setup').run()
+            return _offer_dashboard_login(args.state_dir, command_prefix=parser.prog)
+        if args.custodian_command == 'service':
             from . import service
             if args.action == 'install':
                 result = service.install_service(args.state_dir, Path(sys.executable), enable=args.enable)
             else:
                 result = getattr(service, {'start': 'start_service', 'status': 'service_status', 'stop': 'stop_service', 'uninstall': 'uninstall_service'}[args.action])()
-        elif args.command == 'updates':
+        elif args.custodian_command == 'updates':
             from . import updates
             if args.updates_action == 'security-plan':
                 result = updates.plan_security_updates(args.security_enabled)
@@ -132,15 +141,15 @@ def main(argv=None):
         else:
             from .engine import Engine
             engine = Engine(args.state_dir)
-            if args.command == 'dashboard':
+            if args.custodian_command == 'dashboard':
                 from .web import run_dashboard
                 run_dashboard(engine, port=args.port)
                 return 0
-            if args.command == 'monitor':
+            if args.custodian_command == 'monitor':
                 from .monitor import run_monitor
                 run_monitor(engine, args.state_dir, once=args.once)
                 return 0
-            result = getattr(engine, args.command)()
+            result = getattr(engine, args.custodian_command)()
         print(json.dumps(result, indent=2, ensure_ascii=True))
         if isinstance(result, dict) and (result.get('ok') is False or result.get('status') not in (None, 'ok', 'ready', 'applied')):
             return 1

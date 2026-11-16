@@ -155,6 +155,8 @@ def test_plugin_registers_only_four_readonly_tools_and_excludes_admin_actions():
     spec.loader.exec_module(module)
     tools = {}
     class Context:
+        def register_cli_command(self, **kwargs):
+            self.cli_command = kwargs
         def register_tool(self, **kwargs):
             tools[kwargs['name']] = kwargs
     module.register(Context())

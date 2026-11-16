@@ -20,7 +20,10 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Install isolated project dependencies
-        run: python -m pip install -e ".[tui,test]"
+        run: python -m pip install ".[test]"
+      - name: Exercise installed launchers outside the checkout
+        working-directory: ${{ runner.temp }}
+        run: python -c "import subprocess; subprocess.run(['warden', 'setup', '--help'], check=True); subprocess.run(['custodian', '--help'], check=True)"
       - name: Select owned Windows scratch ancestry
         if: runner.os == 'Windows'
         shell: pwsh

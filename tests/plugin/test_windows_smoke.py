@@ -23,6 +23,9 @@ class FakeContext:
     def __init__(self):
         self.tools = {}
 
+    def register_cli_command(self, **kwargs):
+        self.cli_command = kwargs
+
     def register_tool(self, **kwargs):
         self.tools[kwargs['name']] = kwargs
 

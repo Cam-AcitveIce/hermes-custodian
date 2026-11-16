@@ -1,5 +1,5 @@
 name: hermes-custodian
-version: '0.1.0'
+version: '0.1.1'
 description: Local, scoped security-posture monitoring with terminal setup and an on-demand authenticated dashboard.
 author: Cam-AcitveIce
 requires_hermes: '>=0.23.1'
@@ -9,3 +9,5 @@ provides_tools:
   - warden_changes
   - warden_scan
 provides_hooks: []
+shell_commands:
+  - warden
