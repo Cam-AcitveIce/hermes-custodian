@@ -59,7 +59,7 @@ def register(ctx):
                         pass
                     raise
                 if not (state_dir / 'settings.json').is_file():
-                    return json.dumps({'ok': False, 'error': 'Not configured for this profile. Run hermes warden setup, using the same -p PROFILE selector for a named profile.'})
+                    return json.dumps({'ok': False, 'error': 'Not configured for this profile. Run warden setup using the terminal command supplied by the Hermes installer.'})
                 method = {'warden_status': 'status', 'warden_findings': 'findings', 'warden_changes': 'events', 'warden_scan': 'scan'}[_name]
                 return json.dumps({'ok': True, 'status': 'ok', 'data': getattr(engine, method)()}, ensure_ascii=True)
             except Exception as exc:

@@ -52,7 +52,7 @@ def test_unconfigured_agent_tool_recommends_native_setup():
     import json
     response = json.loads(registered().tools['warden_status']['handler']({}))
     assert response['ok'] is False
-    assert 'hermes warden setup' in response['error']
+    assert 'Run warden setup' in response['error']
 
 
 def test_native_command_uses_selected_hermes_profile_state(profile_home):

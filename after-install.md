@@ -1,21 +1,24 @@
-# Installation complete
+# Next step: Warden setup
 
-If you accepted dependency preparation and enabled the plugin, open a terminal and run:
-
-```sh
-hermes warden setup
-```
-
-For a named profile, use the same profile you installed into:
+After dependency preparation and enablement, Hermes reports `Terminal command ready: warden`. Then run:
 
 ```sh
-hermes -p YOUR_PROFILE warden setup
+warden setup
 ```
 
-Hermes manages the Python environment, including the setup interface. Do not create or activate a separate virtual environment. The bare `warden`/legacy `custodian` shell commands are only guaranteed for a standalone Python package installation; marketplace users should use `hermes warden`.
+No manual pip command, venv creation, activation or `hermes` prefix is required. The launcher uses the Hermes profile you installed into.
 
-Setup asks for discovery consent, watched folders and a dashboard login. Installation and setup do not start monitoring or install a service. After saving scope, run `hermes warden scan`, `hermes warden status`, or `hermes warden dashboard` explicitly. Use the same `-p` selector for a named profile.
+After approving and saving scope:
 
-If you declined dependencies or left the plugin disabled, run `hermes plugins enable hermes-custodian` (with the same profile selector) and accept dependency preparation first. Non-interactive installs can explicitly consent with `hermes plugins install hermes-custodian --yes-deps --enable`; the setup wizard still needs an interactive terminal.
+```sh
+warden scan
+warden status
+warden findings
+warden dashboard
+```
 
-Advanced deployment limit: Hermes currently suppresses plugin CLI commands when `plugins.isolation` is `host`. The command above requires normal local `in_process` plugin loading. Do not disable an existing isolation policy as a workaround; see the standalone instructions in the README for that deployment.
+Setup does not start a monitor or install a background service. Discovery, monitoring scope, monitor startup and service persistence remain explicit choices.
+
+If the plugin was left disabled, enable it through `hermes plugins enable hermes-custodian` (using the same `-p PROFILE` selector for a named profile) and accept dependency preparation. Do not overwrite another program's `warden` command if the installer reports a collision.
+
+This branch requires Hermes installer support for `shell_commands`. If no `Terminal command ready` message appears, do not assume the bare command exists: check the README's release status. The public 0.1.0 catalog pin does not include this integration yet.

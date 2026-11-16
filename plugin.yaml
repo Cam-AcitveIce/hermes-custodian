@@ -9,3 +9,5 @@ provides_tools:
   - warden_changes
   - warden_scan
 provides_hooks: []
+shell_commands:
+  - warden
