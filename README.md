@@ -44,6 +44,18 @@ Captured from the installed package using synthetic fixture data only (paths ali
 
 ## Installation and setup
 
+### Current marketplace release: installation notice
+
+The plugin is listed in the [Hermes marketplace](https://hermes-agent.nousresearch.com/marketplace/hermes-custodian) as `hermes-custodian`:
+
+```sh
+hermes plugins install hermes-custodian
+```
+
+Known packaging issue in catalog version **0.1.0**: this installs the Hermes plugin, but does not make the standalone `custodian` command available on the terminal PATH. If `custodian setup` returns “command not found”, that does not by itself mean the agent plugin failed to install.
+
+The intended replacement flow is marketplace install followed by bare `warden setup`, `warden status`, and `warden scan`, with no manual venv activation. Installer-owned launcher support is being developed; **that flow is not shipped in the current marketplace release yet**. A package rename or README edit alone does not fix launcher delivery. The standalone development instructions below are the current fallback, not the intended final marketplace onboarding.
+
 Python 3.11+ is required. Use the Python environment belonging to the Hermes installation that will load the plugin. The source/plugin entrypoint and the standalone CLI share one implementation; there is no separate Windows plugin or privileged agent process.
 
 Linux / macOS, from this checkout:
@@ -62,7 +74,7 @@ py -3 -m venv .venv
 .\.venv\Scripts\custodian.exe setup
 ```
 
-These create an isolated CLI environment; they do not register the Hermes plugin automatically. The catalog submission is pending. For local plugin loading, follow your Hermes version's `hermes plugins install --help` and use the source directory containing `plugin.yaml` and `__init__.py`. A wheel installs the standalone CLI and its assets, not the repository-root Hermes entrypoint.
+These create an isolated CLI environment; they do not register the Hermes plugin automatically. For local plugin loading, follow your Hermes version's `hermes plugins install --help` and use the source directory containing `plugin.yaml` and `__init__.py`. A wheel installs the standalone CLI and its assets, not the repository-root Hermes entrypoint.
 
 When using a named Hermes profile, set `HERMES_HOME` to that profile before setup and subsequent CLI launches so the agent tools and the app use the same state. First-run setup asks for discovery/scope consent and offers to create the dashboard login; it does not install or start a background service. Choose only the paths you want monitored, save, and run a scan. The TUI and dashboard show the same findings and history as the agent tools.
 
