@@ -24,6 +24,8 @@ def _register():
         def register_tool(self, **kwargs):
             self.registrations.append(kwargs['name'])
             self.tools[kwargs['name']] = kwargs
+        def register_cli_command(self, **kwargs):
+            self.cli_command = kwargs
     context = Context()
     module.register(context)
     return context
