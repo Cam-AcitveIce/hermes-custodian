@@ -68,6 +68,7 @@ async def open_picker(app, pilot):
     from textual.widgets import Button
     await pilot.pause()
     app.screen.query_one('#browse', Button).focus()
+    await pilot.pause()
     await pilot.press('enter')
     await settle(pilot)
 
@@ -131,6 +132,7 @@ def test_cancel_and_escape_leave_the_form_unchanged(tmp_path, how):
                 await pilot.press('escape')
             else:
                 app.screen.query_one('#picker-cancel', Button).focus()
+                await pilot.pause()
                 await pilot.press('enter')
             await settle(pilot)
             assert isinstance(app.screen, SetupScreen)
@@ -183,10 +185,12 @@ def test_home_and_parent_buttons(tmp_path):
             await settle(pilot)
             assert labels(app) == ['[ ] two']
             app.screen.query_one('#picker-parent', Button).focus()
+            await pilot.pause()
             await pilot.press('enter')
             await settle(pilot)
             assert text_of(app, '#picker-path').endswith(str(home / 'alpha'))
             app.screen.query_one('#picker-home', Button).focus()
+            await pilot.pause()
             await pilot.press('enter')
             await settle(pilot)
             assert text_of(app, '#picker-path').endswith(str(home))
@@ -240,6 +244,7 @@ def test_multi_select_survives_navigation_and_add_merges_into_form(tmp_path):
             assert 'Selected: 2' in selected
             assert str(home / 'alpha') in selected and str(home / 'beta' / 'inner') in selected
             app.screen.query_one('#picker-add', Button).focus()
+            await pilot.pause()
             await pilot.press('enter')
             await settle(pilot)
             assert isinstance(app.screen, SetupScreen)
@@ -268,6 +273,7 @@ def test_space_toggles_off_and_add_with_nothing_selected_stays_open(tmp_path):
             await pilot.press('space')
             assert labels(app) == ['[ ] alpha']
             app.screen.query_one('#picker-add', Button).focus()
+            await pilot.pause()
             await pilot.press('enter')
             await settle(pilot)
             assert isinstance(app.screen, FolderPickerScreen)
@@ -285,19 +291,23 @@ def test_select_current_adds_the_open_folder_and_refuses_home(tmp_path):
             await open_picker(app, pilot)
             current = app.screen.query_one('#picker-select-current', Button)
             current.focus()
+            await pilot.pause()
             await pilot.press('enter')
             await settle(pilot)
             assert text_of(app, '#picker-status') == fp.TOO_BROAD
             assert 'Selected: 0' in text_of(app, '#picker-selected')
             app.screen.query_one('#picker-list').focus()
+            await pilot.pause()
             await pilot.press('enter')
             await settle(pilot)
             assert str(home / 'alpha') in text_of(app, '#picker-path')
             current.focus()
+            await pilot.pause()
             await pilot.press('enter')
             await settle(pilot)
             assert 'Selected: 1' in text_of(app, '#picker-selected')
             app.screen.query_one('#picker-add', Button).focus()
+            await pilot.pause()
             await pilot.press('enter')
             await settle(pilot)
             assert watched(app).text == str(home / 'alpha')
@@ -316,6 +326,7 @@ def test_saved_settings_are_kept_and_engine_untouched_by_adding(tmp_path):
             await open_picker(app, pilot)
             await pilot.press('space')
             app.screen.query_one('#picker-add', Button).focus()
+            await pilot.pause()
             await pilot.press('enter')
             await settle(pilot)
             assert watched(app).text == f'/opt/example\n{home / "alpha"}'
@@ -404,6 +415,7 @@ def test_unicode_and_bracket_names_render_and_add_verbatim(tmp_path):
             selected = text_of(app, '#picker-selected')
             assert all(name in selected for name in names)
             app.screen.query_one('#picker-add', Button).focus()
+            await pilot.pause()
             await pilot.press('enter')
             await settle(pilot)
             assert watched(app).text.splitlines() == [str(home / name) for name in sorted(names, key=str.casefold)]
@@ -465,6 +477,7 @@ def test_windows_drive_choice_and_backslash_paths_through_the_widget(tmp_path):
             assert text_of(app, '#picker-path').endswith('C:\\Users\\me')
             assert labels(app) == ['[ ] Projects']
             app.screen.query_one('#picker-drives', Button).focus()
+            await pilot.pause()
             await pilot.press('enter')
             await settle(pilot)
             assert labels(app) == ['    C:\\', '    D:\\']
@@ -479,6 +492,7 @@ def test_windows_drive_choice_and_backslash_paths_through_the_widget(tmp_path):
             await settle(pilot)
             assert labels(app) == ['    C:\\', '    D:\\']
             app.screen.query_one('#picker-add', Button).focus()
+            await pilot.pause()
             await pilot.press('enter')
             await settle(pilot)
         assert results == [['D:\\Work']]

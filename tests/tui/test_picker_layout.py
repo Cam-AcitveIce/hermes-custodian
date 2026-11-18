@@ -22,11 +22,16 @@ def test_picker_actions_fit_terminal(tmp_path, size):
         async with app.run_test(size=size) as pilot:
             browse = next(b for b in app.screen.query(Button)
                           if 'browse' in str(b.label).lower())
-            browse.scroll_visible(animate=False)
+            # Open by keyboard: the test is about the dialog, not scrolling the form.
+            browse.focus()
             await pilot.pause()
-            await pilot.click('#' + browse.id)
-            await pilot.pause(0.5)
-            for name in ('picker-add', 'picker-cancel', 'picker-parent', 'picker-home'):
+            await pilot.press('enter')
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            names = ['picker-add', 'picker-cancel', 'picker-parent', 'picker-home', 'picker-select-current']
+            names += [b.id for b in app.screen.query('#picker-drives')]
+            for name in names:
                 button = app.screen.query_one('#' + name, Button)
                 region = button.region
                 assert button.display

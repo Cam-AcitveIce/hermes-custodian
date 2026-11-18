@@ -71,6 +71,7 @@ def test_named_profile_root_shows_guidance_and_shared_root_action(tmp_path):
             btn = app.screen.query_one('#use-shared-root', Button)
             assert btn.display
             btn.focus()
+            await pilot.pause()
             await pilot.press('enter')
             await pilot.pause()
             assert root_input.value == shared
@@ -99,6 +100,7 @@ def test_changing_root_resets_consent_and_clears_inventory_options(tmp_path):
             discover = app.screen.query_one('#discover', Button)
             assert not discover.disabled
             discover.focus()
+            await pilot.pause()
             await pilot.press('enter')
             await pilot.pause()
             profiles = app.screen.query_one('#profiles', SelectionList)
