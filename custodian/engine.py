@@ -13,6 +13,12 @@ import math
 from .storage import Storage
 from . import _platform
 
+RECOMMENDED_EXCLUSIONS = (
+    '.git', 'node_modules', '.venv', 'venv', 'vendor', '__pycache__',
+    'build', 'dist', '.next', '.cache',
+    '.pytest_cache', '.mypy_cache', '.ruff_cache',
+)
+
 
 def _is_excluded(candidates, patterns):
     """Use the walker's platform semantics for persisted finding coverage."""
@@ -31,7 +37,7 @@ class Engine:
         self.store = Storage(state_dir)
 
     def setup(self, settings: dict) -> dict:
-        result: dict = dict(schema_version=1, profiles=[], watched_paths=[], exclusions=[],
+        result: dict = dict(schema_version=1, profiles=[], watched_paths=[], exclusions=list(RECOMMENDED_EXCLUSIONS),
                       hermes_root=None, interval_seconds=60, max_files=10000, max_file_bytes=1048576,
                       retention_days=30)
         if not isinstance(settings, dict) or set(settings) - set(result):
@@ -140,7 +146,7 @@ class Engine:
                 files[item['path']] = item
         findings = []
         for raw_path, item in sorted(files.items()):
-            if not policy.is_sensitive(Path(raw_path)):
+            if not policy.is_finding_sensitive(Path(raw_path), item.get('type', 'file')):
                 continue
             path = policy.sanitise_text(raw_path)
             if item.get('type') == 'symlink':
@@ -155,14 +161,26 @@ class Engine:
                 exposure = _platform.access_exposure(item)
                 if exposure:
                     title = 'sensitive-path file is accessible beyond its owner' if _platform.NAME == 'windows' else 'sensitive-path file has group/other permission bits set'
-                    evidence = {'mode': oct(exposure['mode'])}
+                    evidence: dict = {'mode': oct(exposure['mode'])}
+                    recommendation = 'Review ownership and restrict permissions manually.'
+                    if _platform.NAME != 'windows':
+                        evidence.update(
+                            severity_basis=exposure.get('severity_basis', 'unspecified_mode_evidence'),
+                            access_verified=False,
+                            assessment_version=2,
+                        )
+                        recommendation = (
+                            'Review intended group sharing and group membership; check parent traversal '
+                            'and ACLs before deciding whether to restrict permissions. '
+                            'Effective access is unknown from mode bits alone.'
+                        )
                     if 'exposed_to' in exposure:
                         evidence['exposed_to'] = exposure['exposed_to']
                     findings.append({'id': hashlib.sha256(('sensitive_permissions:' + raw_path).encode()).hexdigest(),
                                      'severity': exposure.get('severity', 'high'),
                                      'title': title,
                                      'path': path, 'evidence': evidence,
-                                     'recommendation': 'Review ownership and restrict permissions manually.',
+                                     'recommendation': recommendation,
                                      'first_seen': started, 'last_seen': started, 'status': 'open',
                                      'scope_signature': signature})
         changes = []

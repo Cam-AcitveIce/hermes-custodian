@@ -208,7 +208,11 @@
     const lastScan = (status.last_scan && typeof status.last_scan === "object") ? status.last_scan : null;
 
     const findings = rawFindings.map(function (f, idx) {
+      const evidence = (f.evidence && typeof f.evidence === "object") ? f.evidence : {};
+      const modeOnly = String(f.title || "").indexOf("group/other permission bits") !== -1;
+      const assessmentState = modeOnly ? (evidence.assessment_version === 2 ? "mode_only" : "previous_rule") : "recorded";
       return {
+        assessment_state: assessmentState,
         id: String(f.id || ("find-" + (idx + 1))),
         severity: String(f.severity || "low").toLowerCase(),
         status: String(f.status || "open").toLowerCase(),
@@ -546,8 +550,22 @@
     }
   }
 
+  function findingSeverityLabel(finding) {
+    return finding.assessment_state === "previous_rule" ? "REASSESS" : finding.severity.toUpperCase();
+  }
+
+  function findingSeverityClass(finding) {
+    return finding.assessment_state === "previous_rule" ? "is-review" : "is-" + finding.severity;
+  }
+
   function renderOverview(data) {
     const verdict = data.verdict;
+    const priorityFindings = data.open_findings.filter(function (f) { return f.assessment_state !== "previous_rule"; });
+    const historicalCount = data.open_findings.length - priorityFindings.length;
+    const historyPanel = document.getElementById("overview-history-panel");
+    if (historyPanel) historyPanel.classList.toggle("is-hidden", historicalCount === 0);
+    const historyCount = document.getElementById("overview-history-count");
+    if (historyCount) historyCount.textContent = String(historicalCount);
     const banner = document.getElementById("verdict-banner");
     const pill = document.getElementById("verdict-pill");
     const ts = document.getElementById("verdict-timestamp");
@@ -573,10 +591,13 @@
       }
     }
     if (sentence) {
-      sentence.textContent = verdict.sentence;
+      sentence.textContent = historicalCount && priorityFindings.length === 0
+        ? "No current priority assessments. Historical findings require a fresh scan."
+        : verdict.sentence;
     }
     if (detail) {
-      detail.textContent = verdict.detail;
+      const reassessCount = data.open_findings.filter(function (f) { return f.assessment_state === "previous_rule"; }).length;
+      detail.textContent = verdict.detail + (reassessCount ? " " + reassessCount + (reassessCount === 1 ? " finding needs" : " findings need") + " reassessment under the revised permission rule. Previous severity is retained in history, not confirmed as current." : "");
       const ls = data.status && data.status.last_scan;
       if (ls && ls.finished_at && verdict.code === "QUIET") {
         detail.title = formatLocalTimestamp(ls.finished_at).raw;
@@ -587,7 +608,7 @@
 
     const openCountEl = document.getElementById("overview-open-count");
     if (openCountEl) {
-      openCountEl.textContent = String(data.open_findings.length);
+      openCountEl.textContent = String(priorityFindings.length);
     }
 
     const allBtn = document.getElementById("overview-all-findings-btn");
@@ -605,17 +626,19 @@
       const msg = makeEl("span", "text-error", "Stored findings could not be read; the list may be incomplete");
       errRow.appendChild(msg);
       listEl.appendChild(errRow);
-    } else if (data.open_findings.length === 0) {
+    } else if (priorityFindings.length === 0) {
       const emptyRow = makeEl("div", "compact-empty-row");
       const msg = makeEl(
         "span",
         "",
-        data.findings.length > 0
+        historicalCount > 0
+          ? "Previous-rule observations are listed separately below. Current coverage remains unverified."
+          : data.findings.length > 0
           ? ("0 open findings in current snapshot. " + data.findings.length + " resolved findings remain in history.")
           : "0 open findings across watched paths."
       );
       emptyRow.appendChild(msg);
-      if (data.findings.length > 0) {
+      if (data.findings.length > 0 && historicalCount === 0) {
         const viewResolvedBtn = makeEl("button", "quiet-btn", "View resolved in Findings");
         viewResolvedBtn.type = "button";
         viewResolvedBtn.addEventListener("click", function () {
@@ -626,7 +649,9 @@
       }
       listEl.appendChild(emptyRow);
     } else {
-      data.open_findings.forEach(function (f) {
+      priorityFindings.slice().sort(function (a, b) {
+        return (SEVERITY_RANK[b.severity] || 0) - (SEVERITY_RANK[a.severity] || 0);
+      }).slice(0, 5).forEach(function (f) {
         const row = makeEl("button", "compact-finding-row");
         row.type = "button";
         row.setAttribute("role", "listitem");
@@ -634,7 +659,7 @@
           row.classList.add("is-selected");
         }
 
-        const sev = makeEl("span", "sev-badge is-" + f.severity, f.severity.toUpperCase());
+        const sev = makeEl("span", "sev-badge " + findingSeverityClass(f), findingSeverityLabel(f));
         const title = makeEl("span", "finding-row-title", capitaliseTitle(f.title));
         const path = makeEl("span", "finding-row-path", truncateMiddle(f.path, 38));
         path.title = f.path;
@@ -766,7 +791,9 @@
     const query = state.searchQuery.trim().toLowerCase();
     const filtered = findings.filter(function (f) {
       if (state.statusFilter !== "all" && f.status !== state.statusFilter) return false;
-      if (state.severityFilter !== "all" && f.severity !== state.severityFilter) return false;
+      if (state.severityFilter === "review") {
+        if (f.assessment_state !== "previous_rule") return false;
+      } else if (state.severityFilter !== "all" && (f.assessment_state === "previous_rule" || f.severity !== state.severityFilter)) return false;
       if (query) {
         const hay = (
           f.id + " " +
@@ -827,7 +854,7 @@
       }
 
       const tdSev = makeEl("td");
-      tdSev.appendChild(makeEl("span", "sev-badge is-" + f.severity, f.severity.toUpperCase()));
+      tdSev.appendChild(makeEl("span", "sev-badge " + findingSeverityClass(f), findingSeverityLabel(f)));
 
       const tdTitle = makeEl("td", "finding-row-title", capitaliseTitle(f.title));
       const tdPath = makeEl("td", "mono", truncateMiddle(f.path, 52));
@@ -1254,12 +1281,18 @@
     }
 
     const idEl = document.getElementById("drawer-id");
-    if (idEl) idEl.textContent = finding.id;
+    if (idEl) {
+      idEl.textContent = finding.id;
+      idEl.title = finding.id;
+    }
 
     const sevEl = document.getElementById("drawer-severity");
     if (sevEl) {
-      sevEl.textContent = finding.severity.toUpperCase();
-      sevEl.className = "sev-badge is-" + finding.severity;
+      sevEl.textContent = findingSeverityLabel(finding);
+      sevEl.className = "sev-badge " + findingSeverityClass(finding);
+      sevEl.title = finding.assessment_state === "previous_rule"
+        ? "Recorded " + finding.severity.toUpperCase() + " under the previous rule; rescan required."
+        : (finding.assessment_state === "mode_only" ? "Mode-bit triage only; effective access has not been verified." : "Recorded severity");
     }
 
     const statEl = document.getElementById("drawer-status");
@@ -1592,6 +1625,15 @@
         }
         if (state.currentData) renderFindings(state.currentData);
       });
+    });
+
+    const historyBtn = document.getElementById("overview-history-btn");
+    if (historyBtn) historyBtn.addEventListener("click", function () {
+      state.statusFilter = "open";
+      state.severityFilter = "review";
+      const severitySelect = document.getElementById("severity-select");
+      if (severitySelect) severitySelect.value = "review";
+      switchView("findings");
     });
 
     const drawerCloseBtn = document.getElementById("drawer-close-btn");

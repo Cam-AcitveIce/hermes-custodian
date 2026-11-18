@@ -298,14 +298,16 @@ def test_access_exposure():
     # Group readable
     res1 = posix.access_exposure({'mode': 0o640})
     assert res1 is not None
-    assert res1['severity'] == 'high'
+    assert res1['severity'] == 'low'
+    assert res1['access_verified'] is False
     assert res1['mode'] == 0o640
     assert 'summary' in res1
 
     # World readable
     res2 = posix.access_exposure({'mode': 0o644})
     assert res2 is not None
-    assert res2['severity'] == 'high'
+    assert res2['severity'] == 'medium'
+    assert res2['access_verified'] is False
     assert res2['mode'] == 0o644
 
 

@@ -120,25 +120,29 @@ class Storage:
                 if not old or old['status'] != 'open':
                     db.execute('INSERT INTO events(timestamp,kind,path,summary) VALUES (?,?,?,?)',
                                (result['finished_at'], 'finding_opened', finding['path'], finding['title']))
+            for key, old in previous.items():
+                if key in seen or old['status'] not in ('open', 'out_of_scope'):
+                    continue
+                # Exact-path metadata is sufficient to reassess that observation.
+                # Never infer removal/safety for an unseen path in a partial scan.
+                if not result['complete'] and old['path'] not in files:
+                    continue
+                is_covered = covered(old['path']) if covered is not None else (
+                    old.get('scope_signature', signature) == signature
+                )
+                if is_covered:
+                    old['status'] = 'resolved'
+                    old['last_seen'] = result['finished_at']
+                    old['scope_signature'] = signature
+                    db.execute('UPDATE findings SET data=? WHERE id=?', (json.dumps(old), key))
+                    db.execute('INSERT INTO events(timestamp,kind,path,summary) VALUES (?,?,?,?)',
+                               (result['finished_at'], 'finding_resolved', old['path'], old['title']))
+                elif result['complete'] and old['status'] != 'out_of_scope':
+                    old['status'] = 'out_of_scope'
+                    db.execute('UPDATE findings SET data=? WHERE id=?', (json.dumps(old), key))
+                    db.execute('INSERT INTO events(timestamp,kind,path,summary) VALUES (?,?,?,?)',
+                               (result['finished_at'], 'finding_out_of_scope', old['path'], old['title']))
             if result['complete']:
-                for key, old in previous.items():
-                    if key in seen or old['status'] not in ('open', 'out_of_scope'):
-                        continue
-                    is_covered = covered(old['path']) if covered is not None else (
-                        old.get('scope_signature', signature) == signature
-                    )
-                    if is_covered:
-                        old['status'] = 'resolved'
-                        old['last_seen'] = result['finished_at']
-                        old['scope_signature'] = signature
-                        db.execute('UPDATE findings SET data=? WHERE id=?', (json.dumps(old), key))
-                        db.execute('INSERT INTO events(timestamp,kind,path,summary) VALUES (?,?,?,?)',
-                                   (result['finished_at'], 'finding_resolved', old['path'], old['title']))
-                    elif old['status'] != 'out_of_scope':
-                        old['status'] = 'out_of_scope'
-                        db.execute('UPDATE findings SET data=? WHERE id=?', (json.dumps(old), key))
-                        db.execute('INSERT INTO events(timestamp,kind,path,summary) VALUES (?,?,?,?)',
-                                   (result['finished_at'], 'finding_out_of_scope', old['path'], old['title']))
                 db.execute('INSERT OR REPLACE INTO state VALUES (?,?)',
                            ('baseline', json.dumps({'signature': signature, 'files': files})))
             for change in result['changes']:

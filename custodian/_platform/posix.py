@@ -460,19 +460,30 @@ def bounded_snapshot(root: Path, exclusions: list[str], max_files: int, max_file
 
 
 def access_exposure(meta: dict) -> dict | None:
-    """Evaluate permission exposure for sensitive file.
+    """Triage sensitive-entry mode bits, not effective access or exploitability.
 
-    None if private to owner (0o600).
-    Else dict with severity, mode, summary.
+    Parent traversal, group membership and ACL access are not evaluated.
+    Every group/other mode bit remains reportable, even at low severity.
     """
     mode = meta.get('mode', 0) & 0o777
-    if mode & 0o077:
-        return {
-            'severity': 'high',
-            'mode': mode,
-            'summary': 'sensitive-path file has group/other permission bits set',
-        }
-    return None
+    if not mode & 0o077:
+        return None
+    if mode & 0o002:
+        severity, basis = 'high', 'other_write_potential_tamper'
+        detail = 'other-write mode bit set (potential tamper)'
+    elif mode & 0o024:
+        severity, basis = 'medium', 'group_write_or_other_read'
+        detail = 'group-write or other-read mode bits set (needs review)'
+    else:
+        severity, basis = 'low', 'group_read_execute_or_other_execute'
+        detail = 'group read/execute or other-execute mode bits set'
+    return {
+        'severity': severity,
+        'severity_basis': basis,
+        'access_verified': False,
+        'mode': mode,
+        'summary': detail + '; effective access unknown (parent traversal, group membership and ACLs not checked)',
+    }
 
 
 # Secure I/O capabilities used by dashboard keys and metadata discovery.

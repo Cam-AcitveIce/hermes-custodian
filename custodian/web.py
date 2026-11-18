@@ -828,6 +828,15 @@ class CustodianDashboardServer(ThreadingHTTPServer):
 class _DashboardRequestHandler(BaseHTTPRequestHandler):
     server: CustodianDashboardServer  # type: ignore[assignment]
 
+    def handle(self) -> None:
+        try:
+            super().handle()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            # A refreshed/closed browser tab can disconnect during headers,
+            # response writes, or the final flush. Do not retry a partial reply.
+            # Other failures must still reach the server's error reporting.
+            self.close_connection = True
+
     def log_message(self, format: str, *args: Any) -> None:
         # Never write credentials, query strings, or headers to stderr logs.
         return

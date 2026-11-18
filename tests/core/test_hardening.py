@@ -33,6 +33,7 @@ class _PausingPolicy:
             return result
         return types.SimpleNamespace(bounded_snapshot=bounded_snapshot,
                                      is_sensitive=real_policy.is_sensitive,
+                                     is_finding_sensitive=real_policy.is_finding_sensitive,
                                      sanitise_text=real_policy.sanitise_text)
 
 
@@ -320,7 +321,8 @@ class SensitiveSymlinkTests(unittest.TestCase):
         self.assertNotIn('mode', link_finding['evidence'])
         self.assertNotIn('chmod', link_finding['recommendation'].lower())
         reg_finding = by_path[str(regular)]
-        self.assertEqual(reg_finding['severity'], 'high')
+        self.assertEqual(reg_finding['severity'], 'medium')
+        self.assertFalse(reg_finding['evidence']['access_verified'])
         self.assertEqual(reg_finding['title'], 'sensitive-path file has group/other permission bits set')
 
 

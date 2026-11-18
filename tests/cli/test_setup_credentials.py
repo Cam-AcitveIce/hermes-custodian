@@ -25,8 +25,11 @@ def _fake_tui(monkeypatch, state, *, finishes_setup):
                 scope.mkdir(exist_ok=True)
                 Engine(self.state_dir).setup({'watched_paths': [str(scope)]})
 
-    import custodian.tui as tui
-    monkeypatch.setattr(tui, 'CustodianApp', FakeApp)
+    from custodian import setup_cli
+    def fake_guided_setup(engine):
+        FakeApp(state).run()
+        return finishes_setup
+    monkeypatch.setattr(setup_cli, 'run_setup', fake_guided_setup)
 
 
 def _answers(monkeypatch, inputs, passwords):

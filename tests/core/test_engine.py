@@ -38,7 +38,7 @@ class EngineTests(unittest.TestCase):
                 'size': 8, 'mtime_ns': 1}
         policy = types.SimpleNamespace(
             bounded_snapshot=lambda *args, **kwargs: {'files': [dict(item)], 'errors': [], 'complete': True},
-            is_sensitive=lambda path: path.name == '.env', sanitise_text=lambda value: str(value))
+            is_finding_sensitive=lambda path, entry_type: path.name == '.env', sanitise_text=lambda value: str(value))
         self.engine.setup({'watched_paths': [str(self.scope)]})
         with patch.dict('sys.modules', {'custodian.policy': policy}):
             first = self.engine.scan()
@@ -134,7 +134,7 @@ class EngineTests(unittest.TestCase):
         item = {'path': str(self.scope / '.env'), 'mode': 0o644, 'uid': _platform.current_principal(), 'size': 3, 'mtime_ns': 1}
         snapshot = {'files': [item], 'errors': [], 'complete': True}
         policy = types.SimpleNamespace(bounded_snapshot=lambda *args, **kwargs: snapshot,
-                                       is_sensitive=lambda path: path.name == '.env', sanitise_text=str)
+                                       is_finding_sensitive=lambda path, entry_type: path.name == '.env', sanitise_text=str)
         self.engine.setup({'watched_paths': [str(self.scope)]})
         with patch.dict('sys.modules', {'custodian.policy': policy}):
             self.engine.scan()
@@ -158,7 +158,7 @@ class EngineTests(unittest.TestCase):
             calls.append(kwargs['max_files'])
             return {'files': [{'path': str(root / 'file'), 'mode': 0o600, 'uid': _platform.current_principal(),
                                'size': 0, 'mtime_ns': 1}], 'errors': [], 'complete': True}
-        policy = types.SimpleNamespace(bounded_snapshot=snapshot, is_sensitive=lambda path: False, sanitise_text=str)
+        policy = types.SimpleNamespace(bounded_snapshot=snapshot, is_finding_sensitive=lambda path, entry_type: False, sanitise_text=str)
         self.engine.setup({'watched_paths': [str(self.scope), str(other)], 'max_files': 1})
         with patch.dict('sys.modules', {'custodian.policy': policy}):
             result = self.engine.scan()

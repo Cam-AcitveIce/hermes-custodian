@@ -18,10 +18,13 @@ class SetupScreen(Screen):
             yield Static('Choose exactly what I may inspect. Monitoring is local, read-only, and uses no AI calls.', classes='muted')
             yield Label('1 / Find your Hermes profiles')
             yield Input(value=str(Path(os.environ.get('HERMES_HOME', Path.home() / '.hermes'))), placeholder='Hermes root directory', id='hermes-root')
+            yield Static('', id='root-guidance', classes='muted')
+            yield Button('Use shared Hermes root', id='use-shared-root', classes='hidden')
             yield Checkbox('Allow metadata discovery in this Hermes root (no memories or credentials)', id='consent')
             yield Button('Discover profiles', id='discover', disabled=True)
             yield SelectionList(id='profiles')
             yield Label('2 / Watch selected directories — one absolute path per line')
+            yield Button('Browse folders', id='browse')
             yield TextArea('', id='watched', show_line_numbers=False)
             yield Label('Excluded directory names — comma separated')
             yield Input(value='.git,node_modules,.venv,__pycache__,sessions,memories', id='excluded')
@@ -37,14 +40,50 @@ class SetupScreen(Screen):
         try:
             saved = self.app.engine.settings()
         except (ValueError, RuntimeError, OSError):
-            return
-        self.query_one('#watched', TextArea).text = '\n'.join(saved.get('watched_paths', []))
-        self.query_one('#interval', Input).value = str(saved.get('interval_seconds', 60))
-        self.query_one('#excluded', Input).value = ','.join(saved.get('exclusions', []))
+            saved = {}
+        if saved.get('watched_paths'):
+            self.query_one('#watched', TextArea).text = '\n'.join(saved['watched_paths'])
+        if saved.get('interval_seconds'):
+            self.query_one('#interval', Input).value = str(saved['interval_seconds'])
+        if saved.get('exclusions'):
+            self.query_one('#excluded', Input).value = ','.join(saved['exclusions'])
         if saved.get('hermes_root'):
             self.query_one('#hermes-root', Input).value = saved['hermes_root']
         for path in saved.get('profiles', []):
             self.query_one('#profiles', SelectionList).add_option((Path(path).name, path, True))
+        self._check_hermes_root(self.query_one('#hermes-root', Input).value)
+        self.call_after_refresh(self._enable_change_listener)
+
+    def _enable_change_listener(self):
+        self._setup_ready = True
+
+    def _check_hermes_root(self, root_str: str) -> None:
+        try:
+            p = Path(root_str).expanduser()
+            is_profile = len(p.parts) >= 2 and p.parts[-2] == 'profiles'
+        except Exception:
+            is_profile = False
+
+        try:
+            guidance = self.query_one('#root-guidance', Static)
+            btn = self.query_one('#use-shared-root', Button)
+            if is_profile:
+                shared = str(p.parent.parent)
+                guidance.update(f"Selected root is an individual profile ('{p.name}'). Use the shared root '{shared}' to discover all profiles.")
+                btn.display = True
+            else:
+                guidance.update("")
+                btn.display = False
+        except Exception:
+            pass
+
+    def on_input_changed(self, event: Input.Changed):
+        if event.input.id == 'hermes-root':
+            self._check_hermes_root(event.value)
+            if getattr(self, '_setup_ready', False):
+                self.query_one('#consent', Checkbox).value = False
+                self.query_one('#discover', Button).disabled = True
+                self.query_one('#profiles', SelectionList).clear_options()
 
     def on_checkbox_changed(self, event: Checkbox.Changed):
         if event.checkbox.id == 'consent':
@@ -54,6 +93,30 @@ class SetupScreen(Screen):
         app = self.app
         message = self.query_one('#setup-message', Static)
         try:
+            if event.button.id == 'use-shared-root':
+                curr = Path(self.query_one('#hermes-root', Input).value).expanduser()
+                if len(curr.parts) >= 2 and curr.parts[-2] == 'profiles':
+                    self.query_one('#hermes-root', Input).value = str(curr.parent.parent)
+            elif event.button.id == 'browse':
+                from . import folder_picker as fp
+                from .tui_folder_picker import FolderPickerScreen
+                home_dir = getattr(app, 'browse_home', None) or Path.home()
+                model = fp.PickerModel(
+                    home_dir,
+                    home=home_dir,
+                    forbidden=[app.state_dir],
+                    autoload=False,
+                )
+                def on_picker_closed(selected: list[str] | None):
+                    if selected:
+                        area = self.query_one('#watched', TextArea)
+                        area.text = fp.merge_paths(
+                            area.text,
+                            selected,
+                            case_insensitive=model.case_insensitive,
+                        )
+                        message.update(f"Added {len(selected)} folder(s). Nothing is monitored until you approve scope and save.")
+                app.push_screen(FolderPickerScreen(model), on_picker_closed)
             if event.button.id == 'discover':
                 if not self.query_one('#consent', Checkbox).value:
                     raise ValueError('Approve discovery first.')
@@ -175,11 +238,12 @@ class CustodianApp(App):
     Button { margin: 1 1 1 0; background: #19222d; border: solid #344352; }
     Button.-primary { background: #183b3a; color: #b1e0d7; }
     .actions { height: 5; }
+    .hidden { display: none; }
     #health, #findings, #changes, #coverage { padding: 1 2; border-left: solid #31444b; background: #10161c; margin: 1 0; }
     #setup-message { color: #dbbb80; }
     '''
 
-    def __init__(self, state_dir: Path, force_setup=False, engine=None):
+    def __init__(self, state_dir: Path, force_setup=False, engine=None, browse_home: Path | None = None):
         super().__init__()
         self.state_dir = state_dir
         self.force_setup = force_setup
@@ -187,6 +251,7 @@ class CustodianApp(App):
             from .engine import Engine
             engine = Engine(state_dir)
         self.engine = engine
+        self.browse_home = Path(browse_home) if browse_home is not None else Path.home()
 
     def on_mount(self):
         configured = False

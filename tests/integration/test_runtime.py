@@ -34,7 +34,7 @@ def test_real_cli_persists_and_detects_regression(tmp_path):
         credential.chmod(0o644)
     second = json.loads(subprocess.run(command + ['scan'], capture_output=True, text=True, check=True).stdout)
     assert any(item['kind'] == 'modified' and item['path'] == str(file) for item in second['changes'])
-    assert any(item['severity'] == 'high' and item['path'] == str(credential) for item in second['findings'])
+    assert any(item['severity'] == ('high' if os.name == 'nt' else 'medium') and item['path'] == str(credential) for item in second['findings'])
     assert 'not-a-real-secret' not in json.dumps(second)
     subprocess.run(command + ['monitor', '--once'], capture_output=True, text=True, check=True)
     status = json.loads(subprocess.run(command + ['status'], capture_output=True, text=True, check=True).stdout)

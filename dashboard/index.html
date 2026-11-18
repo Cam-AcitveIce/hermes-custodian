@@ -195,12 +195,23 @@
           <div class="panel">
             <div class="panel-header">
               <div class="panel-title-wrap">
-                <h2 class="panel-title">Open findings</h2>
-                <span id="overview-open-count" class="count-pill">0</span>
+                <h2 class="panel-title">Priority findings</h2>
+                <span id="overview-open-count" class="count-pill" title="Current-rule open findings; preview shows up to five, highest severity first">0</span>
               </div>
               <button type="button" id="overview-all-findings-btn" class="text-action-btn">Inspect all findings (0)</button>
             </div>
             <div id="overview-findings-list" class="compact-findings-list" role="list"></div>
+          </div>
+
+          <div id="overview-history-panel" class="panel is-hidden">
+            <div class="panel-header">
+              <div class="panel-title-wrap">
+                <h2 class="panel-title">Historical findings awaiting reassessment</h2>
+                <span id="overview-history-count" class="count-pill">0</span>
+              </div>
+              <button type="button" id="overview-history-btn" class="text-action-btn">Review history</button>
+            </div>
+            <div class="compact-empty-row">These observations used the previous permission rule. Their recorded severity remains in history; they are not current priority assessments.</div>
           </div>
 
           <div class="quiet-facts-section" aria-label="Posture facts">
@@ -243,6 +254,7 @@
                 <label for="severity-select" class="sr-only">Severity</label>
                 <select id="severity-select" class="control-select">
                   <option value="all">All severities</option>
+                  <option value="review">Needs reassessment (previous rule)</option>
                   <option value="high">High only</option>
                   <option value="medium">Medium only</option>
                   <option value="low">Low only</option>
@@ -429,10 +441,11 @@
           <span class="drawer-eyebrow">Finding record</span>
           <span id="drawer-id" class="drawer-id mono">—</span>
         </div>
-        <button type="button" id="drawer-close-btn" class="icon-btn" aria-label="Close detail drawer">
+        <button type="button" id="drawer-close-btn" class="quiet-btn drawer-close-btn" aria-label="Close detail drawer" title="Close details (Esc)">
           <svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M4 4l8 8M12 4l-8 8"/>
           </svg>
+          <span>Close</span>
         </button>
       </div>
 

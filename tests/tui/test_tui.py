@@ -49,3 +49,85 @@ def test_setup_requires_explicit_discovery_consent(tmp_path):
             await pilot.pause()
             assert not app.screen.query_one('#discover', Button).disabled
     asyncio.run(check())
+
+
+def test_named_profile_root_shows_guidance_and_shared_root_action(tmp_path):
+    from custodian.tui import CustodianApp
+    from textual.widgets import Button, Input, Static
+    class Engine:
+        def settings(self):
+            raise RuntimeError('not configured')
+    async def check():
+        app = CustodianApp(tmp_path, engine=Engine())
+        async with app.run_test(size=(110, 38)) as pilot:
+            await pilot.pause()
+            root_input = app.screen.query_one('#hermes-root', Input)
+            root_input.value = '/synthetic/hermes/profiles/argo'
+            await pilot.pause()
+            guidance = str(app.screen.query_one('#root-guidance', Static).render())
+            assert 'individual profile' in guidance
+            assert '/synthetic/hermes' in guidance
+            btn = app.screen.query_one('#use-shared-root', Button)
+            assert btn.display
+            btn.focus()
+            await pilot.press('enter')
+            await pilot.pause()
+            assert root_input.value == '/synthetic/hermes'
+            assert not btn.display
+    asyncio.run(check())
+
+
+def test_changing_root_resets_consent_and_clears_inventory_options(tmp_path):
+    from custodian.tui import CustodianApp
+    from textual.widgets import Button, Checkbox, Input, SelectionList
+    class Engine:
+        def settings(self):
+            raise RuntimeError('not configured')
+        def inventory(self, root):
+            return [{'name': 'p1', 'path': str(root / 'profiles' / 'p1')}]
+    async def check():
+        app = CustodianApp(tmp_path, engine=Engine())
+        async with app.run_test(size=(110, 38)) as pilot:
+            await pilot.pause()
+            root_input = app.screen.query_one('#hermes-root', Input)
+            root_input.value = str(tmp_path / 'hermes')
+            await pilot.pause()
+            consent = app.screen.query_one('#consent', Checkbox)
+            consent.value = True
+            await pilot.pause()
+            discover = app.screen.query_one('#discover', Button)
+            assert not discover.disabled
+            discover.focus()
+            await pilot.press('enter')
+            await pilot.pause()
+            profiles = app.screen.query_one('#profiles', SelectionList)
+            assert profiles.option_count == 1
+            # Changing root resets discovery consent and clears inventory options
+            root_input.value = str(tmp_path / 'other_hermes')
+            await pilot.pause()
+            assert not consent.value
+            assert discover.disabled
+            assert profiles.option_count == 0
+    asyncio.run(check())
+
+
+def test_saved_selected_profiles_preserved_on_setup_open(tmp_path):
+    from custodian.tui import CustodianApp
+    from textual.widgets import SelectionList
+    class Engine:
+        def settings(self):
+            return {
+                'hermes_root': str(tmp_path / 'hermes'),
+                'profiles': [str(tmp_path / 'hermes' / 'profiles' / 'ivy')],
+                'watched_paths': [],
+                'exclusions': [],
+                'interval_seconds': 60,
+            }
+    async def check():
+        app = CustodianApp(tmp_path, force_setup=True, engine=Engine())
+        async with app.run_test(size=(110, 38)) as pilot:
+            await pilot.pause()
+            profiles = app.screen.query_one('#profiles', SelectionList)
+            assert profiles.option_count == 1
+            assert list(profiles.selected) == [str(tmp_path / 'hermes' / 'profiles' / 'ivy')]
+    asyncio.run(check())

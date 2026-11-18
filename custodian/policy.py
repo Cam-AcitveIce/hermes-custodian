@@ -91,15 +91,21 @@ def bounded_snapshot(root: Path, exclusions: list[str], max_files: int,
     return _platform.bounded_snapshot(root, exclusions, max_files, max_file_bytes)
 
 
-def is_sensitive(path: Path) -> bool:
-    """Classify by path only; never inspect potentially secret contents."""
+def _is_artifact_sensitive(path: Path) -> bool:
+    """Classify permission-alert candidates by path, never by file contents."""
     for part in Path(path).parts:
         name = part.casefold()
-        if (name.startswith(('.env', 'auth.', 'auth-', 'auth_', 'oauth', 'id_rsa', 'id_ed25519', 'id_ecdsa', 'id_dsa'))
-                or any(word in name for word in ('credential', 'token', 'secret', 'private_key',
-                                                 'private-key', 'privkey', 'keychain', 'apikey',
-                                                 'password', 'api_key', 'api-key',
-                                                 'google-chrome', 'bravesoftware', 'microsoft-edge'))
+        # Match artifact names, not vocabulary used by ordinary source files.
+        # Keep established private-area exclusions, including auth caches.
+        artifact = re.fullmatch(
+            r'(?:auth|oauth|credentials?|tokens?|secrets?|private[_-]key|privkey|'
+            r'keychain|apikeys?|api[_-]keys?|passwords?)'
+            r'(?:\.(?:json|ya?ml|toml|ini|cfg|conf|txt|md|db))?'
+            r'(?:\.(?:bak|backup|old|orig)|~)?', name)
+        if (name.startswith(('.env', 'id_rsa', 'id_ed25519', 'id_ecdsa', 'id_dsa'))
+                or artifact
+                or name in {'auth-cache', 'oauth-cache', 'google-chrome',
+                            'bravesoftware', 'microsoft-edge'}
                 or name in {'auth', 'wallet', 'gcloud', '.netrc', '.npmrc', '.pypirc', '.aws', '.azure', '.docker',
                             'user.md', 'memory.md', 'logs', 'conversations',
                             'auth.json', 'auth.yaml', 'auth.yml', '.ssh', '.gnupg',
@@ -110,3 +116,41 @@ def is_sensitive(path: Path) -> bool:
                 or name.endswith(('.pem', '.key', '.p12', '.pfx', '.keystore', '.kdbx'))):
             return True
     return False
+
+
+def is_sensitive(path: Path) -> bool:
+    """Conservative no-content-read/no-traversal guard, independent of alerts.
+
+    Preserve historical substring exclusions: an ambiguous credential-like name
+    must never become readable merely because it no longer merits a HIGH alert.
+    """
+    if _is_artifact_sensitive(path):
+        return True
+    for part in Path(path).parts:
+        name = part.casefold()
+        if (name.startswith(('auth.', 'auth-', 'auth_', 'oauth'))
+                or any(word in name for word in (
+                    'credential', 'token', 'secret', 'private_key', 'private-key',
+                    'privkey', 'keychain', 'apikey', 'password', 'api_key', 'api-key',
+                    'google-chrome', 'bravesoftware', 'microsoft-edge'))):
+            return True
+    return False
+
+
+def is_finding_sensitive(path: Path, entry_type: str) -> bool:
+    """A privacy exclusion alone does not prove secret material is exposed.
+
+    Keep conservative no-read/no-traversal policy separate from permission alerts.
+    The backends label directories and other non-regular entries as 'other'.
+    """
+    name = Path(path).name.casefold()
+    if entry_type == 'other' and name in {
+        'auth', 'auth-cache', 'oauth', 'oauth-cache', 'token', 'tokens',
+        'credential', 'credentials', 'secret', 'secrets',
+    }:
+        return False
+    if entry_type == 'file' and name.endswith('.pub') and name.startswith(
+        ('id_rsa', 'id_ed25519', 'id_ecdsa', 'id_dsa')
+    ):
+        return False
+    return _is_artifact_sensitive(path)

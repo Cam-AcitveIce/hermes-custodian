@@ -148,6 +148,10 @@ def inventory(hermes_root: Path) -> list[dict]:
                     if name in ('.', '..') or '/' in name or '\\' in name or ':' in name:
                         entries[0]['errors'].append('Profile changed or is unavailable')
                         continue
+                    # Administrative storage is not a profile. Skip before opening,
+                    # but retain its contribution to the bounded entry budget.
+                    if name.startswith('.'):
+                        continue
                     try:
                         with profiles.open_directory(name) as child:
                             add(name, root / 'profiles' / name, child)
