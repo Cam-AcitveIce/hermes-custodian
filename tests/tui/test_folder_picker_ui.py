@@ -107,7 +107,8 @@ def test_browse_button_opens_modal_listing_child_folders(tmp_path):
             assert labels(app) == ['[ ] alpha', '[ ] beta']
             assert 'not monitoring approval' in text_of(app, '#picker-note')
             assert 'Selected: 0' in text_of(app, '#picker-selected')
-            assert not app.screen.query('#picker-drives')
+            # Windows lists drives above the home folder; POSIX has none.
+            assert bool(app.screen.query('#picker-drives')) == (os.name == 'nt')
     run(check)
 
 
@@ -285,13 +286,16 @@ def test_select_current_adds_the_open_folder_and_refuses_home(tmp_path):
             current = app.screen.query_one('#picker-select-current', Button)
             current.focus()
             await pilot.press('enter')
+            await settle(pilot)
             assert text_of(app, '#picker-status') == fp.TOO_BROAD
             assert 'Selected: 0' in text_of(app, '#picker-selected')
             app.screen.query_one('#picker-list').focus()
             await pilot.press('enter')
             await settle(pilot)
+            assert str(home / 'alpha') in text_of(app, '#picker-path')
             current.focus()
             await pilot.press('enter')
+            await settle(pilot)
             assert 'Selected: 1' in text_of(app, '#picker-selected')
             app.screen.query_one('#picker-add', Button).focus()
             await pilot.press('enter')

@@ -1,7 +1,12 @@
 """Partial scans may close only findings whose exact path was inspected."""
+import os
+
+import pytest
+
 from custodian.engine import Engine
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX mode-bit findings; Windows evaluates ACLs')
 def test_partial_scan_resolves_checked_path_without_resolving_unseen(tmp_path):
     project = tmp_path / 'project'; project.mkdir()
     a = project / '.env.a'; a.write_text('# synthetic'); a.chmod(0o644)

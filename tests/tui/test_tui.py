@@ -54,6 +54,7 @@ def test_setup_requires_explicit_discovery_consent(tmp_path):
 def test_named_profile_root_shows_guidance_and_shared_root_action(tmp_path):
     from custodian.tui import CustodianApp
     from textual.widgets import Button, Input, Static
+    shared = str(Path('/synthetic/hermes'))  # native separators, as the TUI shows them
     class Engine:
         def settings(self):
             raise RuntimeError('not configured')
@@ -66,13 +67,13 @@ def test_named_profile_root_shows_guidance_and_shared_root_action(tmp_path):
             await pilot.pause()
             guidance = str(app.screen.query_one('#root-guidance', Static).render())
             assert 'individual profile' in guidance
-            assert '/synthetic/hermes' in guidance
+            assert shared in guidance
             btn = app.screen.query_one('#use-shared-root', Button)
             assert btn.display
             btn.focus()
             await pilot.press('enter')
             await pilot.pause()
-            assert root_input.value == '/synthetic/hermes'
+            assert root_input.value == shared
             assert not btn.display
     asyncio.run(check())
 
