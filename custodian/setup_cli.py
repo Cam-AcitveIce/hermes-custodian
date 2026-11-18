@@ -269,7 +269,7 @@ def run_setup(engine, *, home=None):
         if discovery_approved:
             settings['hermes_root'] = str(root)
         engine.setup(settings)
-        _say('Scope saved. Run custodian scan, custodian monitor, or custodian dashboard when ready.')
+        _say('Scope saved. Run warden scan, warden monitor, or warden dashboard when ready.')
         return True
     except (EOFError, KeyboardInterrupt):
         _say('\nCancelled. Nothing saved.')

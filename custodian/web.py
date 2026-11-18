@@ -190,18 +190,18 @@ def _resolve_auth(engine: Any, auth: Any | None) -> Any:
         state_dir = getattr(store, "root", None) or getattr(engine, "state_dir", None)
         if state_dir is None:
             raise DashboardAuthNotConfiguredError(
-                "Dashboard login is not configured. Run 'custodian dashboard-credentials' first."
+                "Dashboard login is not configured. Run 'warden dashboard-credentials' first."
             )
         try:
             from custodian.dashboard_auth import DashboardAuth
         except ImportError as exc:
             raise DashboardAuthNotConfiguredError(
-                "Dashboard authentication module unavailable. Run 'custodian dashboard-credentials' first."
+                "Dashboard authentication module unavailable. Run 'warden dashboard-credentials' first."
             ) from exc
         auth = DashboardAuth(Path(state_dir))
     if not hasattr(auth, "configured") or not auth.configured():
         raise DashboardAuthNotConfiguredError(
-            "Dashboard login credentials are not configured. Run 'custodian dashboard-credentials' to set a username and password."
+            "Dashboard login credentials are not configured. Run 'warden dashboard-credentials' to set a username and password."
         )
     return auth
 
@@ -276,7 +276,7 @@ def _compute_coverage_summary(
         state = "unconfigured"
         label = "UNCONFIGURED"
         degraded = True
-        reason = "Hermes Security Warden is not configured yet. Run 'custodian setup' via CLI/TUI to select monitored roots."
+        reason = "Hermes Security Warden is not configured yet. Run 'warden setup' via CLI/TUI to select monitored roots."
     elif raw_state == "not_scanned" or last_scan is None:
         state = "not_scanned"
         label = "NOT SCANNED"
@@ -396,7 +396,7 @@ def _compute_scope_preview(
         "files_checked": files_checked,
         "budget_utilization_pct": utilization,
         "policy_disclosure": POLICY_DISCLOSURE_TEXT,
-        "read_only_notice": "Dashboard is read-only. Modify scope or budgets via CLI/TUI (custodian setup).",
+        "read_only_notice": "Dashboard is read-only. Modify scope or budgets via CLI/TUI (warden setup).",
     }
 
 

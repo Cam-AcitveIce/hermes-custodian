@@ -297,7 +297,7 @@
     const rawCovState = String(cov.state || (configured ? "complete" : "unconfigured")).toLowerCase();
     const covState = (rawCovState === "complete" || rawCovState === "heal" + "thy") ? "complete" : rawCovState;
     const isCovComplete = covState === "complete" && Boolean(cov.complete !== false && (!lastScan || lastScan.complete !== false));
-    const covReason = String(cov.reason || (configured ? "" : "Hermes Security Warden is not configured yet. Run 'custodian setup' via terminal to select monitored roots."));
+    const covReason = String(cov.reason || (configured ? "" : "Hermes Security Warden is not configured yet. Run 'warden setup' via terminal to select monitored roots."));
     const filesChecked = Number(cov.files_checked || (lastScan ? lastScan.files_checked : 0) || 0);
     const maxFiles = Number(cov.max_files || (adaptedSettings ? adaptedSettings.max_files : 0) || (sp.max_files || 0));
 
@@ -385,7 +385,7 @@
         files_checked: Number(sp.files_checked || filesChecked || 0),
         budget_utilization_pct: sp.budget_utilization_pct !== undefined ? sp.budget_utilization_pct : null,
         policy_disclosure: String(sp.policy_disclosure || "Content SHA-256 hashes are computed only for .py and .md files within max_file_bytes; all other file types are inspected metadata-only (mode, uid, size, mtime_ns), and sensitive directories/credentials are never enumerated or read."),
-        read_only_notice: String(sp.read_only_notice || "Dashboard is read-only. Modify scope or budgets via CLI/TUI (custodian setup).")
+        read_only_notice: String(sp.read_only_notice || "Dashboard is read-only. Modify scope or budgets via CLI/TUI (warden setup).")
       },
       settings: adaptedSettings,
       findings: findings,
@@ -537,10 +537,10 @@
           const ls = data.status && data.status.last_scan;
           if (ls && ls.finished_at) {
             const tf = formatLocalTimestamp(ls.finished_at);
-            stoppedText.textContent = "The local custodian monitor process is not running. Last scan was finished at " + tf.display + "; file changes since then are not observed.";
+            stoppedText.textContent = "The local warden monitor process is not running. Last scan was finished at " + tf.display + "; file changes since then are not observed.";
             stoppedText.title = tf.raw;
           } else {
-            stoppedText.textContent = "The local custodian monitor process is not running. File changes are not currently observed.";
+            stoppedText.textContent = "The local warden monitor process is not running. File changes are not currently observed.";
             stoppedText.removeAttribute("title");
           }
         }
@@ -1012,7 +1012,7 @@
       const desc = makeEl(
         "p",
         "empty-desc",
-        inv.explanation || "Profile discovery was not approved in terminal setup. Run 'custodian setup' in a terminal to consent to hermes_root inspection."
+        inv.explanation || "Profile discovery was not approved in terminal setup. Run 'warden setup' in a terminal to consent to hermes_root inspection."
       );
       card.appendChild(desc);
       container.appendChild(card);

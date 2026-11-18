@@ -30,7 +30,7 @@ class SetupScreen(Screen):
             yield Input(value='.git,node_modules,.venv,__pycache__,sessions,memories', id='excluded')
             yield Label('3 / Reconciliation interval in seconds (minimum 10)')
             yield Input(value='60', id='interval', type='integer')
-            yield Static('No service is installed here. Enable startup separately with custodian service install --enable.\nSoftware updates are report-only in this release. Credential files are metadata-only.', classes='muted')
+            yield Static('No service is installed here. Enable startup separately with warden service install --enable.\nSoftware updates are report-only in this release. Credential files are metadata-only.', classes='muted')
             yield Checkbox('Approve monitoring only the selected profiles and paths', id='scope-consent')
             yield Button('Save scope & open control centre', variant='primary', id='save')
             yield Static('', id='setup-message', markup=False)
@@ -167,7 +167,7 @@ class ControlScreen(Screen):
             yield Static('', id='changes', markup=False)
             yield Label('Your coverage')
             yield Static('', id='coverage', markup=False)
-            yield Static('Web: run custodian dashboard in another terminal.\nStartup: custodian service install --enable (explicit opt-in).\nSame-user software cannot prevent an unrestricted same-user agent from tampering.', classes='muted')
+            yield Static('Web: run warden dashboard in another terminal.\nStartup: warden service install --enable (explicit opt-in).\nSame-user software cannot prevent an unrestricted same-user agent from tampering.', classes='muted')
         yield Footer()
 
     def on_mount(self):

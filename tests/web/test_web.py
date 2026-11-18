@@ -178,7 +178,7 @@ class WebBootstrapTest(unittest.TestCase):
         unconfigured_auth = FakeDashboardAuth(is_configured=False)
         with self.assertRaises((RuntimeError, ValueError)) as ctx:
             make_server(self.engine, port=0, auth=unconfigured_auth)
-        self.assertIn("custodian dashboard-credentials", str(ctx.exception))
+        self.assertIn("warden dashboard-credentials", str(ctx.exception))
 
     def test_make_server_binds_ephemeral_port_with_configured_auth(self) -> None:
         srv = make_server(self.engine, port=0, auth=self.auth)
@@ -216,7 +216,7 @@ class WebBootstrapTest(unittest.TestCase):
         # Without configuring DashboardAuth in state_dir, make_server fails clearly
         with self.assertRaises((RuntimeError, ValueError)) as ctx:
             make_server(self.engine, port=0)
-        self.assertIn("custodian dashboard-credentials", str(ctx.exception))
+        self.assertIn("warden dashboard-credentials", str(ctx.exception))
 
         # After configuring DashboardAuth, make_server constructs it from engine.store.root automatically
         real_auth = DashboardAuth(self.tmp_path)
@@ -953,7 +953,7 @@ const unconfiguredSnap = {{
   coverage_summary: {{
     state: 'unconfigured',
     label: 'UNCONFIGURED',
-    reason: "Custodian is not configured yet. Run 'custodian setup' via terminal to select monitored roots."
+    reason: "Custodian is not configured yet. Run 'warden setup' via terminal to select monitored roots."
   }},
   settings: null,
   findings: [],
@@ -964,7 +964,7 @@ const unconfiguredSnap = {{
 const adaptedUnconfigured = api.fromSnapshot(unconfiguredSnap);
 assert.equal(adaptedUnconfigured.configured, false);
 assert.equal(adaptedUnconfigured.verdict.code, "CAN'T VOUCH");
-assert.equal(adaptedUnconfigured.verdict.detail, "Custodian is not configured yet. Run 'custodian setup' via terminal to select monitored roots.");
+assert.equal(adaptedUnconfigured.verdict.detail, "Custodian is not configured yet. Run 'warden setup' via terminal to select monitored roots.");
 assert.equal(adaptedUnconfigured.settings, null);
 assert.equal(adaptedUnconfigured.findings.length, 0);
 
