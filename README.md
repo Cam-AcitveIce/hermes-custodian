@@ -1,155 +1,179 @@
 # Hermes Security Warden
 
-**Ask your Hermes agent: "what needs attention on this machine?" and get an answer backed by evidence.**
+**Ask your Hermes agent "what needs attention on this machine?" and get an answer backed by evidence.**
 
-Hermes Security Warden is a quiet watcher for the device your agent lives on. It remembers what your files and permissions looked like, notices when something changes, and shows you exactly what needs a look: in the terminal, in a local dashboard, or straight from your agent.
+Warden watches the machine your Hermes agent runs on. It records what your files and permissions look like, notices when they change, and shows you what needs a look — in the terminal, in a local web dashboard, or through your agent.
 
-- **Your agent can check its own home.** Four read-only tools (`warden_status`, `warden_findings`, `warden_changes`, `warden_scan`) work on Linux, macOS and native Windows.
-- **Every finding shows its evidence.** The path, what's wrong, when it was seen and what to do next. No vague scores, no black box.
-- **It tells you what changed.** A persistent baseline turns "something is different" into a dated list.
-- **You choose the scope.** Nothing is watched until you approve it in a first-run setup, and credential files, memory and chat history are never opened.
-- **It admits its blind spots.** If a scan is incomplete or the store is unreadable, it says so instead of showing an empty, calm screen.
-- **Private by design.** The dashboard runs on your machine only, behind a login. No telemetry, no cloud, no self-updater, and the AI can't give itself more power.
+- **Evidence, not scores.** Every finding shows the path, what's wrong, when it was seen and what to do about it.
+- **Change history.** A saved baseline turns "something is different" into a dated list of changes.
+- **You choose the scope.** Nothing is watched until you approve it. Credential files, memory and chat history are never opened.
+- **Honest about gaps.** If a scan is incomplete or its data can't be read, it says so rather than showing an empty, all-clear screen.
+- **Local only.** No telemetry, no cloud, no self-updater. The dashboard runs on your machine behind a login, and the agent can't grant itself more access.
 
-Setup is a guided first run. See [Installation and setup](#installation-and-setup).
-
-Naming: Hermes Security Warden is the display name, and the agent tools are `warden_*`. The plugin/catalog ID (`hermes-custodian`), the Python package (`custodian`), CLI (`warden`, with a legacy `custodian` alias), the state folder and the service identifiers keep their existing names, so nothing needs migrating. The earlier `custodian_*` tool names are gone, with no aliases.
-
-Status: 0.1.1 release candidate. The released 0.1.0 baseline was tested on GitHub-hosted Linux, macOS and Windows runners with Python 3.11, 3.12, 3.13 and 3.14, including native Windows plugin-tool and dashboard/discovery workflows. The new onboarding and bare-launcher changes need fresh native CI at the release commit; earlier matrix results do not verify this candidate. The accompanying Hermes installer change is also unreleased. No antivirus, exploit detection or tamper-proof sandbox claim.
+Works on Linux, macOS and Windows with Python 3.11 or newer.
 
 ## Screenshots
 
-Captured from the installed package using synthetic fixture data only (paths aliased to `/demo`); nothing here comes from a real machine.
+Screenshots use synthetic data only.
 
-**Overview**: what needs attention, coverage and monitor state.
+**Overview** — what needs attention, coverage and monitor state.
 
 ![Overview: what needs attention, coverage and monitor state](docs/screenshots/overview.png)
 
-**Findings**: evidence, severity and timestamps for each open finding.
+**Findings** — evidence, severity and timestamps for each open finding.
 
 ![Findings list with evidence and severity](docs/screenshots/findings.png)
 
-**Changes**: what changed since the previous scan.
+**Changes** — what changed since the previous scan.
 
 ![Changes since the previous scan](docs/screenshots/changes.png)
 
-## Interfaces
+## Install
 
-- First-run terminal setup: explicit profile/path consent, monitoring limits and saved settings.
-- Terminal control centre: evidence, changes and coverage.
-- Background workload: bounded scans, persistent baselines, duplicate-instance protection and heartbeat.
-- On-demand authenticated loopback web dashboard, focused on findings and changes—not a live agent-command feed.
-- Four Hermes tools (`warden_status`, `warden_findings`, `warden_changes`, `warden_scan`): status, findings, changes and scoped read-only scanning. They take no arguments.
-- Explicit user-level background-service management (systemd, launchd or Task Scheduler) and read-only OS update checks.
+### Standalone
 
-## Installation and setup
+Clone the repository and install it into its own virtual environment.
 
-Python 3.11+ is required. This branch adds an installer-owned `warden` terminal command using Hermes's proposed `shell_commands` support.
-
-**Release status:** the current marketplace pin is still 0.1.0, which does not expose a standalone terminal command. The bare-command integration requires the accompanying Hermes installer change; it must be released upstream before this branch is advertised as compatible with a released Hermes version. The catalog pin and minimum Hermes version will be updated together after that gate.
-
-With a Hermes build containing launcher support, the end-user flow is:
+**Linux / macOS**
 
 ```sh
-hermes plugins install hermes-custodian
-warden setup
-```
-
-Accept the dependency preparation and enablement prompts. The installer prepares the setup interface and reports `Terminal command ready: warden`. There is no separate installer, manual pip command, venv activation or shell alias. Subsequent launches are direct commands:
-
-```sh
-warden scan
-warden status
-warden findings
-warden dashboard
-```
-
-The launcher is bound to the profile used at installation. For a named profile, install with `hermes -p work plugins install hermes-custodian`, then use the same bare commands. An existing command belonging to another app or profile is never overwritten. One global command name has one profile owner; uninstalling that owner's plugin removes only its unmodified installer-owned launcher.
-
-Installation and setup do not start monitoring or install a background service. Discovery, saved scope, monitor startup and service persistence each retain their explicit consent. Shell-command dispatch uses the managed package entrypoint and does not require in-process loading of the agent plugin; do not weaken `plugins.isolation` to expose a command.
-
-The optional `hermes warden` interface remains a fallback for normal in-process plugin loading, not the intended bare-command workflow. The standalone package keeps `custodian` as a compatibility alias; package/repository/state/service identifiers remain `hermes-custodian`/`custodian` so existing state needs no migration.
-
-### Optional standalone development installation
-
-These instructions are for developers who want a standalone CLI, not a prerequisite for marketplace users.
-
-Linux / macOS, from this checkout:
-
-```sh
+git clone https://github.com/Cam-AcitveIce/hermes-custodian.git
+cd hermes-custodian
 python3 -m venv .venv
-.venv/bin/python -m pip install -e '.[tui]'
-.venv/bin/warden setup
+.venv/bin/pip install -e .
 ```
 
-Windows PowerShell, from this checkout (no activation or execution-policy change required):
+To run `warden` from anywhere instead of typing `.venv/bin/warden`, link it onto your PATH:
+
+```sh
+ln -s "$PWD/.venv/bin/warden" ~/.local/bin/warden
+```
+
+**Windows (PowerShell)**
 
 ```powershell
+git clone https://github.com/Cam-AcitveIce/hermes-custodian.git
+cd hermes-custodian
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[tui]"
-.\.venv\Scripts\warden.exe setup
+.\.venv\Scripts\pip install -e .
 ```
 
-These create an isolated CLI environment; they do not register the Hermes plugin automatically. A wheel installs the standalone CLI and its assets, not the repository-root Hermes entrypoint. Marketplace users should use the managed install above instead.
+The command is then `.\.venv\Scripts\warden.exe`.
 
-When using a named Hermes profile, set `HERMES_HOME` to that profile before setup and subsequent CLI launches so the agent tools and the app use the same state. First-run setup asks for discovery/scope consent and offers to create the dashboard login; it does not install or start a background service. Choose only the paths you want monitored, save, and run a scan. The TUI and dashboard show the same findings and history as the agent tools.
+To update later, run `git pull` in the folder. The `-e` install picks up the new code automatically.
 
-CLI commands (use the `.venv` executable path above if the environment is not activated):
+### As a Hermes plugin
+
+Installing as a plugin also gives your agent four read-only tools: `warden_status`, `warden_findings`, `warden_changes` and `warden_scan`.
 
 ```sh
-warden setup
-warden tui
-warden scan
-warden status
-warden findings
-warden events
-warden monitor
-warden dashboard
-warden updates
-warden updates security-plan --enable
-warden updates security-plan --disable
+hermes plugins install https://github.com/Cam-AcitveIce/hermes-custodian
+hermes warden setup
+```
+
+Hermes asks before installing the plugin's Python dependencies. Inside Hermes, every command below is run as `hermes warden <command>`.
+
+## Get started
+
+```sh
+warden setup       # choose your Hermes profiles and the folders to watch
+warden scan        # run a first scan
+warden findings    # see what needs attention
+warden dashboard   # open the web dashboard
+```
+
+Setup asks for your consent at each step and offers to create a dashboard login at the end. It doesn't start monitoring or install anything that runs in the background — those are separate steps you choose.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `warden setup` | Guided setup: find Hermes profiles and choose watched folders |
+| `warden tui` | Full-screen terminal control centre |
+| `warden scan` | Scan the approved folders once |
+| `warden status` | Monitoring health and coverage |
+| `warden findings` | Open findings with their evidence |
+| `warden events` | Recent changes |
+| `warden monitor` | Keep scanning in the foreground (`--once` for one cycle) |
+| `warden dashboard` | Start the local web dashboard (`--port` to choose a port) |
+| `warden dashboard-credentials` | Set or reset the dashboard login |
+| `warden service install \| start \| status \| stop \| uninstall` | Run the monitor as a background service |
+| `warden updates` | Check for OS updates without installing anything |
+
+`setup`, `tui` and `dashboard-credentials` need an interactive terminal. `custodian` still works as an alias for `warden`.
+
+## Web dashboard
+
+`warden dashboard` serves a read-only view of findings and changes on `127.0.0.1` only. You sign in with a username and password set during setup, or with `warden dashboard-credentials` (12 characters minimum, entered at a hidden prompt).
+
+The password is stored only as a salted scrypt hash. Sessions expire, sign-in attempts are rate-limited, and there is no MFA. It's built for use on the same machine; to reach it from elsewhere, use SSH port forwarding.
+
+## Background monitoring
+
+```sh
+warden service install --enable   # install and enable at login
+warden service start              # start it now
+```
+
+This uses a systemd user service on Linux, a LaunchAgent on macOS and a per-user Task Scheduler task on Windows. Installing doesn't start it, and nothing is installed unless you run these commands. User services start when you log in; starting before login isn't guaranteed.
+
+## Hermes profiles and where data is stored
+
+Warden keeps its settings, findings and history in a state folder:
+
+| Situation | Location |
+|---|---|
+| `HERMES_HOME` is set (including inside Hermes) | `$HERMES_HOME/plugin-data/hermes-custodian/` |
+| Linux | `$XDG_STATE_HOME/hermes-custodian` (default `~/.local/state/hermes-custodian`) |
+| macOS | `~/Library/Application Support/hermes-custodian` |
+| Windows | `%LOCALAPPDATA%\hermes-custodian` |
+
+If you use the standalone install alongside the plugin for a named Hermes profile, set `HERMES_HOME` to that profile first so both share the same data. To pick a folder yourself, put `--state-dir /some/path` before the command.
+
+The state folder must not be writable by other users. A group-writable parent folder (the default on Ubuntu and Raspberry Pi OS) is accepted only if you own it and nobody else is in its group. Otherwise, run `chmod g-w` on the parent or choose a private folder with `--state-dir`.
+
+## OS updates
+
+`warden updates` only reports what's available. It reads the APT cache on Linux, runs `softwareupdate -l` on macOS and queries Windows Update on Windows.
+
+On Debian and Ubuntu there are also commands to preview and apply a security-updates-only `unattended-upgrades` policy:
+
+```sh
+warden updates security-plan --enable    # preview only, writes nothing
 warden updates security-apply --plan-id <PLAN_ID> --enable
-warden service status
-warden service install --enable
-warden service start
-warden service stop
-warden service uninstall
 ```
 
-Setup/TUI require a real interactive terminal. Unattended launches do not hang on an onboarding prompt. Monitoring and dashboard operation require completed setup. Service installation and enablement do not start the workload implicitly; use `warden service start` to start the installed unit explicitly. User services start with the user manager; boot-before-login persistence is not promised without administrator-managed user-manager lifecycle. `warden updates security-plan --enable|--disable` previews native Debian/Ubuntu security-only `unattended-upgrades` policy (`Automatic-Reboot "false"`) without writing files. `warden updates security-apply --plan-id <PLAN_ID>` is admin-only: it requires real and effective root (`uid=0, euid=0`) running from a root-owned installation (never `sudo` from a user-writable checkout/venv), re-verifies `plan_id`, prompts interactively on the terminal for `'APPLY SECURITY POLICY ' + PLAN_ID` (no `--yes`/`--approve` flags), and is never exposed through AI plugin tools or the web dashboard. Live root policy application and reboot behaviour were not executed in test verification.
+`security-apply` runs only as real root, from a root-owned installation, and asks you to type a confirmation phrase. It never reboots the machine, and it can't be triggered by the agent or the dashboard.
 
-When launched with `HERMES_HOME`, state follows that profile under `plugin-data/hermes-custodian/`. Otherwise the standalone CLI uses `$XDG_STATE_HOME/hermes-custodian` (fallback `~/.local/state/hermes-custodian`) on Linux, `~/Library/Application Support/hermes-custodian` on macOS, or `%LOCALAPPDATA%\hermes-custodian` on Windows. Use the global `--state-dir /absolute/path` option before the command to select an explicit state directory. Keep each profile's ownership and scope deliberate. The plugin never automatically opens another profile's state.
+## What it checks, and what it doesn't
 
-The web dashboard binds to 127.0.0.1 only and signs in with a username and password you set once, like Hermes's own basic dashboard login. First-run `warden setup` offers to create it when you finish; set or reset it any time with `warden dashboard-credentials` (masked prompts, never a command-line flag, minimum 12 characters). Only a salted scrypt verifier is stored, in a private file in the state directory; sessions expire, are bound to the current password, and failed logins are rate-limited. This is a single shared local login with no MFA, intended for loopback use. For remote access, use SSH forwarding; no public listener or tunnel is installed.
+- **Content fingerprints** only for `.py` and `.md` files. Other files get metadata checks only (permissions, owner, size, modified time).
+- **Sensitive files** such as `.env` files, keys, OAuth stores and browser data are checked by permissions only. Their contents are never read, hashed or shown to the agent.
+- **Private Hermes areas** (memories, sessions, chat history) are never listed or read.
+- **Symlinks and special files** are never followed. Hitting a scan limit shows up as incomplete coverage.
+- **Permission findings** come from mode bits, so they don't account for ACLs, group membership or parent folder access. Each finding says this.
+- A changed file is not proof of malware.
+- **Not a sandbox, antivirus or EDR.** Anything running as your user could stop Warden or rewrite its data.
+- The dashboard cookie isn't tied to a port, so other local web servers in the same browser could receive it. Treat other local users as trusted.
 
-## Scope and limitations
+## Privacy
 
-- Linux, macOS and native Windows are tested. The background-service adapters use systemd user services, LaunchAgents or per-user Task Scheduler tasks respectively; startup behavior depends on the user's login/session and OS permissions. No service is installed implicitly.
-- Credential files are checked as metadata only: no `.env`, OAuth stores, private keys or browser credential contents are loaded into the AI or hashed for integrity.
-- Only admitted, non-sensitive, singly-linked `.py` and `.md` files receive content fingerprints. Other selected file types receive metadata checks only. Sensitive directories (including private memory/history areas) are not enumerated. Symlinks and special files are never followed/read; scan limits and errors appear as incomplete coverage.
-- File changes are not proof of malware. Findings carry their evidence and limitations.
-- Same-user software cannot prevent an unrestricted same-user shell from changing its configuration, stopping it or rewriting state. This is not a sandbox or an EDR replacement.
-- Linux update detection reads the local APT cache; macOS uses `softwareupdate -l`, and Windows queries the Windows Update COM search API. Native queries may contact OS/vendor services. They do not install updates, and availability or security classification may be unknown. Security-update policy preview/apply is Linux-only and separate from detection.
-- This catalog plugin has no self-updater. Code updates must use Hermes's catalog SHA-pin/review process.
-- No automatic reboot, service restart, privileged escalation, exploit execution or arbitrary command executor.
-- The state folder must not be writable by other users. A group-writable parent (the 775 default on Ubuntu and Raspberry Pi OS) is accepted only when it is yours and its group has no other members. If other accounts, containers or services share that group, run `chmod g-w` on the parents or choose a state directory under a private (mode 700) parent with `--state-dir`.
-- The dashboard session cookie is not port-scoped by browsers, so another local process listening on a different 127.0.0.1 port in the same browser could be sent it. The dashboard binds to loopback only, uses an HttpOnly, SameSite=Strict cookie, exact Host and Origin checks, a 12-hour idle and 14-day absolute session limit, and rate-limited sign-in. Treat the machine's local users as trusted.
-- If the findings or events store cannot be read (for example a locked or corrupt database), the dashboard says so and shows degraded coverage instead of an empty list.
+- Nothing is scanned or started when the plugin loads. Scans happen only when you or your agent ask, or when you start the monitor.
+- Stored data contains paths, fingerprints, findings and change history — never credential contents.
+- There is no telemetry, and monitoring never calls an AI model.
+- System tools (systemctl, APT, launchctl, schtasks and so on) are run with fixed arguments, timeouts and a minimal environment. API keys, proxy settings and `PATH`/`PYTHONPATH` overrides are not passed on.
 
-## Privacy and behaviour disclosures
-
-The plugin registers tools without scanning files or starting processes at import time. Explicitly requested scans read selected regular files and metadata outside the plugin data directory; metadata inventory reads selected Hermes configuration, never private conversation/memory/personality files. No telemetry or cloud model calls are needed for monitoring. Stored local state contains paths, fingerprints, findings, redacted inventory and event history—not credential contents.
-
-The user-service and native update adapters execute fixed argument-array subprocesses (systemctl/APT, launchctl/softwareupdate, or schtasks/PowerShell with a fixed Windows Update query), with timeouts and no shell command construction. Each child process gets a freshly built minimal environment, never the agent's own: a fixed system-directory `PATH` and `C` locale, plus only what that command needs (`HOME`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` for `systemctl --user`; `SystemRoot`, `WINDIR`, `SystemDrive`, `TEMP` and `TMP` for the Windows tools, with the profile data directories added for PowerShell). API keys, proxy settings, `PYTHONPATH`, `LD_PRELOAD`, `DYLD_*` and the parent `PATH` are not passed on. The monitor is long-running only when explicitly launched/installed. The dashboard is a separate on-demand local process. Host configuration changes are never implied by installing or registering the plugin.
-
-## Verification
+## Development
 
 ```sh
-.venv/bin/python -m pytest tests -q
-hermes plugins doctor .
-hermes plugins validate . --install-deps
+.venv/bin/pip install -e '.[test]'
+.venv/bin/python -m pytest -q
 ```
 
-Performance targets, not yet verified: monitoring below 100 MiB steady-state RSS and below 1% of one logical CPU while idle on a Pi 5. Dashboard server memory is measured separately. The monitor does not import Textual or run a web server, and never calls an AI model.
+CI runs the tests on Linux, macOS and Windows with Python 3.11–3.14.
 
-Catalog admission and a demo are separate release gates. A catalog PR is not approval or a guarantee of security.
+The plugin and package are still named `hermes-custodian`, the Python package is `custodian`, and the state folder and services keep those names so existing installs don't need migrating.
+
+## Status
+
+Release candidate (0.1.1). The Hermes plugin catalog still lists 0.1.0.

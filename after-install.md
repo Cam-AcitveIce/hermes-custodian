@@ -1,24 +1,19 @@
-# Next step: Warden setup
-
-After dependency preparation and enablement, Hermes reports `Terminal command ready: warden`. Then run:
+# Next step: set up Warden
 
 ```sh
-warden setup
+hermes warden setup
 ```
 
-No manual pip command, venv creation, activation or `hermes` prefix is required. The launcher uses the Hermes profile you installed into.
+Setup asks which Hermes profiles and folders Warden may watch. Nothing is monitored until you approve it, and setup doesn't install or start anything in the background.
 
-After approving and saving scope:
+Then:
 
 ```sh
-warden scan
-warden status
-warden findings
-warden dashboard
+hermes warden scan        # first scan
+hermes warden findings    # what needs attention
+hermes warden dashboard   # local web dashboard
 ```
 
-Setup does not start a monitor or install a background service. Discovery, monitoring scope, monitor startup and service persistence remain explicit choices.
+For a named profile, add `-p <profile>` after `hermes`. Your agent can also use the `warden_status`, `warden_findings`, `warden_changes` and `warden_scan` tools.
 
-If the plugin was left disabled, enable it through `hermes plugins enable hermes-custodian` (using the same `-p PROFILE` selector for a named profile) and accept dependency preparation. Do not overwrite another program's `warden` command if the installer reports a collision.
-
-This branch requires Hermes installer support for `shell_commands`. If no `Terminal command ready` message appears, do not assume the bare command exists: check the README's release status. The public 0.1.0 catalog pin does not include this integration yet.
+If the plugin was left disabled, run `hermes plugins enable hermes-custodian` and accept the dependency prompt.
