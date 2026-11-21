@@ -1,4 +1,12 @@
-"""Installed Hermes plugins, MCP servers, OS apps/packages discovery and safe updates."""
+"""Installed Hermes plugins, MCP servers, OS apps/packages discovery and safe updates.
+
+Security invariants:
+- Never scans ~/.hermes or $HERMES_HOME without explicit consented settings['hermes_root'].
+- Uses strict per-manager allowlist validation for update targets (forbids trailing -/+, .., /, :).
+- Never escalates a missing target_name on singular update targets to a full upgrade.
+- All subprocess calls resolve binaries from trusted minimal_env PATHs, pass stdin=DEVNULL,
+  and never use shell=True.
+"""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -6,7 +14,9 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
+import stat
 import subprocess
 from typing import Any
 
@@ -14,33 +24,126 @@ from . import _platform
 from ._subprocess_env import minimal_env
 from . import policy as _policy
 
-_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+:/-]{0,127}$")
+_APT_PKG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9.+-]{0,126}[a-z0-9])?(?::[a-z0-9][a-z0-9-]{0,15})?$")
+_FLATPAK_ID_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}(?:\.[A-Za-z0-9_-]{1,64})+$")
+_BREW_PKG_RE = re.compile(r"^[a-z0-9][a-z0-9@._-]{0,127}$")
+_PLUGIN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 def _sanitise(text: str) -> str:
     return _policy.sanitise_text(str(text))
 
 
-def _parse_simple_yaml_fields(text: str) -> dict[str, str]:
-    """Extract top-level scalar fields from plugin.yaml without requiring PyYAML."""
+def _trusted_which(name: str, env_cmd: str) -> str | None:
+    trusted_path = minimal_env(env_cmd).get("PATH", "")
+    found = shutil.which(name, path=trusted_path)
+    if found and not _platform.IS_WINDOWS:
+        try:
+            st = os.stat(found)
+            if not stat.S_ISREG(st.st_mode) or (st.st_mode & 0o022):
+                return None
+        except OSError:
+            return None
+    if found:
+        return found
+    # For user-installed Hermes CLI only: allow ~/.local/bin/hermes if owned by current user & not group/world-writable
+    if name == "hermes" and not _platform.IS_WINDOWS:
+        cand = Path.home() / ".local" / "bin" / "hermes"
+        try:
+            st = os.stat(cand)
+            if stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid() and not (st.st_mode & 0o022) and os.access(cand, os.X_OK):
+                return str(cand)
+        except OSError:
+            pass
+    return None
+
+
+def _validate_target_name(target_type: str, target_name: str | None) -> tuple[bool, str]:
+    """Validate package/plugin name strictly per package manager."""
+    singular_types = {"hermes_plugin", "os_package", "flatpak", "brew"}
+    if target_type in singular_types:
+        if not isinstance(target_name, str) or not target_name:
+            return False, f"target_name is required for {target_type}."
+    elif target_name is None:
+        return True, ""
+
+    if not isinstance(target_name, str) or len(target_name) > 128:
+        return False, "Invalid package or plugin name."
+    if ".." in target_name or "/" in target_name or "\\" in target_name or "://" in target_name:
+        return False, "Package or plugin name contains forbidden path/URL characters."
+    if target_name.startswith("-") or target_name.endswith(("-", "+")):
+        return False, "Package or plugin name must not start with '-' or end with '-'/'+'."
+
+    if target_type == "os_package":
+        if _platform.NAME == "linux":
+            if not _APT_PKG_RE.fullmatch(target_name):
+                return False, "Invalid APT package name."
+        elif not _PLUGIN_ID_RE.fullmatch(target_name):
+            return False, "Invalid package identifier."
+    elif target_type == "flatpak":
+        if not _FLATPAK_ID_RE.fullmatch(target_name):
+            return False, "Invalid Flatpak application ID."
+    elif target_type == "brew":
+        if not _BREW_PKG_RE.fullmatch(target_name):
+            return False, "Invalid Homebrew formula name."
+    elif target_type == "hermes_plugin":
+        if not _PLUGIN_ID_RE.fullmatch(target_name):
+            return False, "Invalid Hermes plugin ID."
+    return True, ""
+
+
+def _read_bounded_file(path: Path, max_bytes: int = 32768) -> bytes | None:
+    try:
+        return _platform.read_file_nofollow(path, max_bytes=max_bytes)
+    except (OSError, ValueError):
+        return None
+
+
+def _parse_yaml_metadata(raw: bytes) -> dict[str, str]:
+    """Safely parse plugin.yaml via PyYAML (rejecting aliases/tags) with simple fallback."""
     fields: dict[str, str] = {}
+    try:
+        import yaml
+        for token in yaml.scan(raw):
+            if isinstance(token, (yaml.tokens.AliasToken, yaml.tokens.AnchorToken, yaml.tokens.TagToken)):
+                return {}
+        data = yaml.safe_load(raw)
+        if isinstance(data, dict):
+            for key in ("name", "version", "description", "author", "repository", "homepage", "source"):
+                val = data.get(key)
+                if isinstance(val, (str, int, float)):
+                    cleaned = " ".join(_sanitise(str(val)).split())[:200]
+                    if cleaned:
+                        fields[key] = cleaned
+            return fields
+    except Exception:
+        pass
+    text = raw.decode("utf-8", errors="ignore")
     for line in text.splitlines()[:80]:
-        if not line or line.startswith((" ", "\t", "#")):
-            continue
-        if ":" not in line:
+        if not line or line.startswith((" ", "\t", "#")) or ":" not in line:
             continue
         key, raw_val = line.split(":", 1)
         key = key.strip().lower()
-        val = raw_val.strip().strip("\"'")
+        val = raw_val.split("#", 1)[0].strip().strip("\"'")
+        if val in (">", "|", ">-", "|-"):
+            continue
         if key in ("name", "version", "description", "author", "repository", "homepage", "source") and val:
             fields[key] = _sanitise(val)[:200]
     return fields
 
 
-def _read_plugin_metadata(plugin_dir: Path) -> dict[str, Any]:
+def _scrub_remote_url(raw_url: str) -> str:
+    url = re.sub(r"://[^/@]+@", "://", raw_url.strip())
+    url = url.split("?", 1)[0].split("#", 1)[0]
+    return _sanitise(url)[:200]
+
+
+def _read_plugin_metadata(plugin_dir: Path, *, has_hermes_cli: bool) -> dict[str, Any]:
     """Read safe metadata from a plugin directory (plugin.yaml, manifest.json, pyproject.toml)."""
+    plugin_id = _sanitise(plugin_dir.name)
     meta: dict[str, Any] = {
-        "name": _sanitise(plugin_dir.name),
+        "id": plugin_id,
+        "name": plugin_id,
         "version": "unknown",
         "description": "",
         "source": "local",
@@ -51,75 +154,92 @@ def _read_plugin_metadata(plugin_dir: Path) -> dict[str, Any]:
     }
 
     for yaml_name in ("plugin.yaml", "plugin.yml"):
-        cand = plugin_dir / yaml_name
-        if cand.is_file() and not cand.is_symlink():
-            try:
-                fields = _parse_simple_yaml_fields(cand.read_text(encoding="utf-8", errors="ignore")[:32768])
-                if fields.get("name"):
-                    meta["name"] = fields["name"]
-                if fields.get("version"):
-                    meta["version"] = fields["version"]
-                if fields.get("description"):
-                    meta["description"] = fields["description"]
-                if fields.get("repository") or fields.get("source"):
-                    meta["source"] = fields.get("repository") or fields.get("source")
-            except OSError:
-                pass
+        raw = _read_bounded_file(plugin_dir / yaml_name, max_bytes=32768)
+        if raw is not None:
+            fields = _parse_yaml_metadata(raw)
+            if fields.get("name"):
+                meta["name"] = fields["name"]
+            if fields.get("version"):
+                meta["version"] = fields["version"]
+            if fields.get("description"):
+                meta["description"] = fields["description"]
+            if fields.get("repository") or fields.get("source"):
+                meta["source"] = fields.get("repository") or fields.get("source")
             break
 
-    manifest = plugin_dir / "manifest.json"
-    if manifest.is_file() and not manifest.is_symlink():
+    raw_manifest = _read_bounded_file(plugin_dir / "manifest.json", max_bytes=32768)
+    if raw_manifest is not None:
         try:
-            data = json.loads(manifest.read_text(encoding="utf-8", errors="ignore")[:32768])
+            data = json.loads(raw_manifest.decode("utf-8", errors="ignore"))
             if isinstance(data, dict):
-                if isinstance(data.get("name"), str):
-                    meta["name"] = _sanitise(data["name"])[:128]
-                if isinstance(data.get("version"), str):
-                    meta["version"] = _sanitise(data["version"])[:64]
-                if isinstance(data.get("description"), str):
-                    meta["description"] = _sanitise(data["description"])[:200]
-        except (OSError, ValueError):
+                if isinstance(data.get("name"), str) and data["name"].strip():
+                    meta["name"] = _sanitise(data["name"].strip())[:128]
+                if isinstance(data.get("version"), str) and data["version"].strip():
+                    meta["version"] = _sanitise(data["version"].strip())[:64]
+                if isinstance(data.get("description"), str) and data["description"].strip():
+                    meta["description"] = _sanitise(data["description"].strip())[:200]
+        except ValueError:
             pass
 
-    pyproject = plugin_dir / "pyproject.toml"
-    if meta["version"] == "unknown" and pyproject.is_file() and not pyproject.is_symlink():
-        try:
-            text = pyproject.read_text(encoding="utf-8", errors="ignore")[:32768]
+    if meta["version"] == "unknown":
+        raw_pyproj = _read_bounded_file(plugin_dir / "pyproject.toml", max_bytes=32768)
+        if raw_pyproj is not None:
+            text = raw_pyproj.decode("utf-8", errors="ignore")
             m = re.search(r'(?m)^version\s*=\s*["\']([^"\']+)["\']', text)
             if m:
                 meta["version"] = _sanitise(m.group(1))[:64]
-        except OSError:
-            pass
 
     git_dir = plugin_dir / ".git"
-    if git_dir.exists():
+    if git_dir.is_dir() and not git_dir.is_symlink():
         meta["git_backed"] = True
         meta["updatable"] = True
-        git_bin = shutil.which("git")
+        git_bin = _trusted_which("git", "git")
         if git_bin:
             try:
                 res = subprocess.run(
                     [git_bin, "-C", str(plugin_dir), "config", "--get", "remote.origin.url"],
+                    stdin=subprocess.DEVNULL,
                     capture_output=True, text=True, timeout=3, check=False, env=minimal_env("git"),
                 )
                 if res.returncode == 0 and res.stdout.strip():
-                    # Strip any embedded credentials in git URLs
-                    url = re.sub(r"://[^/@]+@", "://", res.stdout.strip())
-                    meta["source"] = _sanitise(url)[:200]
+                    meta["source"] = _scrub_remote_url(res.stdout)
             except (OSError, subprocess.SubprocessError):
                 pass
 
-    if shutil.which("hermes"):
+    if has_hermes_cli and _PLUGIN_ID_RE.fullmatch(plugin_id):
         meta["updatable"] = True
 
     return meta
 
 
-def discover_hermes_plugins(settings: dict[str, Any] | None = None, inventory_data: dict[str, Any] | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Discover installed Hermes plugins and configured MCP servers."""
-    plugins_by_name: dict[str, dict[str, Any]] = {}
+def discover_hermes_plugins(
+    settings: dict[str, Any] | None = None,
+    inventory_data: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
+    """Discover installed Hermes plugins & MCP servers ONLY from consented hermes_root.
+
+    Returns (plugins, mcp_servers, discovery_approved).
+    """
+    plugins_by_id: dict[str, dict[str, Any]] = {}
     mcp_servers: list[dict[str, Any]] = []
     seen_mcp: set[tuple[str, str]] = set()
+    has_hermes_cli = bool(_trusted_which("hermes", "hermes"))
+
+    consented_root: Path | None = None
+    if isinstance(settings, dict):
+        raw_root = settings.get("hermes_root")
+        if isinstance(raw_root, str) and raw_root.strip():
+            cand = Path(raw_root.strip())
+            if cand.is_absolute() and ".." not in cand.parts and not cand.is_symlink():
+                consented_root = cand
+
+    discovery_approved = bool(
+        consented_root is not None
+        or (isinstance(inventory_data, dict) and inventory_data.get("discovery_approved"))
+    )
+
+    if not discovery_approved:
+        return [], [], False
 
     # 1. From consented inventory profiles (enabled plugins & MCP servers)
     enabled_names: set[str] = set()
@@ -128,10 +248,14 @@ def discover_hermes_plugins(settings: dict[str, Any] | None = None, inventory_da
             if not isinstance(prof, dict):
                 continue
             prof_name = _sanitise(prof.get("name") or "default")
-            for pname in prof.get("plugins") or []:
+            meta_obj = prof.get("metadata") if isinstance(prof.get("metadata"), dict) else {}
+            prof_plugins = prof.get("plugins") or meta_obj.get("plugins") or []
+            prof_mcps = prof.get("mcp_servers") or meta_obj.get("mcp_servers") or []
+            for pname in prof_plugins:
                 clean = _sanitise(str(pname))
                 enabled_names.add(clean)
-                plugins_by_name.setdefault(clean, {
+                plugins_by_id.setdefault(clean, {
+                    "id": clean,
                     "name": clean,
                     "version": "installed",
                     "description": f"Configured in profile '{prof_name}'",
@@ -139,10 +263,10 @@ def discover_hermes_plugins(settings: dict[str, Any] | None = None, inventory_da
                     "path": _sanitise(prof.get("path") or ""),
                     "enabled": True,
                     "git_backed": False,
-                    "updatable": bool(shutil.which("hermes")),
+                    "updatable": has_hermes_cli and bool(_PLUGIN_ID_RE.fullmatch(clean)),
                     "kind": "hermes_plugin",
                 })
-            for mname in prof.get("mcp_servers") or []:
+            for mname in prof_mcps:
                 clean_m = _sanitise(str(mname))
                 key = (clean_m, prof_name)
                 if key not in seen_mcp:
@@ -154,63 +278,53 @@ def discover_hermes_plugins(settings: dict[str, Any] | None = None, inventory_da
                         "kind": "mcp_server",
                     })
 
-    # 2. Scan plugin directories under HERMES_HOME / consented hermes_root / ~/.hermes
-    candidate_roots: list[Path] = []
-    if isinstance(settings, dict) and isinstance(settings.get("hermes_root"), str) and settings["hermes_root"]:
-        candidate_roots.append(Path(settings["hermes_root"]))
-    env_home = os.environ.get("HERMES_HOME")
-    if env_home:
-        candidate_roots.append(Path(env_home))
-    default_hermes = Path.home() / ".hermes"
-    if default_hermes.is_dir():
-        candidate_roots.append(default_hermes)
+    # 2. Scan plugins/ directory strictly inside consented hermes_root
+    if consented_root is not None:
+        plugins_dir = consented_root / "plugins"
+        if plugins_dir.is_dir() and not plugins_dir.is_symlink():
+            try:
+                for child in sorted(plugins_dir.iterdir()):
+                    if not child.is_dir() or child.is_symlink() or child.name.startswith("."):
+                        continue
+                    meta = _read_plugin_metadata(child, has_hermes_cli=has_hermes_cli)
+                    if enabled_names:
+                        meta["enabled"] = (meta["id"] in enabled_names) or (meta["name"] in enabled_names)
+                    else:
+                        meta["enabled"] = True
+                    plugins_by_id[meta["id"]] = meta
+            except OSError:
+                pass
 
-    seen_dirs: set[str] = set()
-    for root in candidate_roots:
-        plugins_dir = root / "plugins"
-        if not plugins_dir.is_dir() or plugins_dir.is_symlink():
-            continue
-        try:
-            for child in sorted(plugins_dir.iterdir()):
-                if not child.is_dir() or child.is_symlink() or child.name.startswith("."):
-                    continue
-                resolved = str(child)
-                if resolved in seen_dirs:
-                    continue
-                seen_dirs.add(resolved)
-                meta = _read_plugin_metadata(child)
-                meta["enabled"] = meta["name"] in enabled_names or child.name in enabled_names or True
-                plugins_by_name[meta["name"]] = meta
-        except OSError:
-            continue
-
-    return sorted(plugins_by_name.values(), key=lambda x: x["name"].lower()), mcp_servers
+    return sorted(plugins_by_id.values(), key=lambda x: x["name"].lower()), mcp_servers, True
 
 
 def _discover_linux_apps(upgradable_map: dict[str, dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
     apps: list[dict[str, Any]] = []
     managers: list[str] = []
 
-    # 1. APT / dpkg (prioritize upgradable + manually installed packages so list is clean & actionable)
-    dpkg_bin = shutil.which("dpkg-query") or ("/usr/bin/dpkg-query" if Path("/usr/bin/dpkg-query").is_file() else None)
+    # 1. APT / dpkg (prioritize upgradable + manually installed packages)
+    dpkg_bin = _trusted_which("dpkg-query", "apt")
     if dpkg_bin:
         managers.append("apt")
         manual_pkgs: set[str] = set()
-        apt_mark = shutil.which("apt-mark") or ("/usr/bin/apt-mark" if Path("/usr/bin/apt-mark").is_file() else None)
+        apt_mark = _trusted_which("apt-mark", "apt")
         if apt_mark:
             try:
                 res_m = subprocess.run(
                     [apt_mark, "showmanual"],
-                    capture_output=True, text=True, timeout=10, check=False, env=minimal_env("apt"),
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True, text=True, timeout=5, check=False, env=minimal_env("apt"),
                 )
                 if res_m.returncode == 0:
                     manual_pkgs = {line.strip() for line in res_m.stdout.splitlines() if line.strip()}
             except (OSError, subprocess.SubprocessError):
                 pass
+        seen_apt: set[str] = set()
         try:
             res = subprocess.run(
                 [dpkg_bin, "-W", "-f=${Package}\t${Version}\t${db:Status-Abbrev}\t${Section}\n"],
-                capture_output=True, text=True, timeout=15, check=False, env=minimal_env("apt"),
+                stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, timeout=10, check=False, env=minimal_env("apt"),
             )
             if res.returncode == 0:
                 for line in res.stdout.splitlines():
@@ -219,12 +333,13 @@ def _discover_linux_apps(upgradable_map: dict[str, dict[str, Any]]) -> tuple[lis
                         continue
                     pkg_name, version, status = parts[0].strip(), parts[1].strip(), parts[2].strip()
                     section = parts[3].strip() if len(parts) > 3 else ""
-                    if not status.startswith("ii"):
+                    if not status.startswith("ii") or pkg_name in seen_apt:
                         continue
                     upd = upgradable_map.get(pkg_name)
                     is_manual = pkg_name in manual_pkgs if manual_pkgs else not pkg_name.startswith("lib")
                     if not upd and not is_manual:
                         continue
+                    seen_apt.add(pkg_name)
                     apps.append({
                         "name": _sanitise(pkg_name),
                         "manager": "apt",
@@ -238,29 +353,29 @@ def _discover_linux_apps(upgradable_map: dict[str, dict[str, Any]]) -> tuple[lis
         except (OSError, subprocess.SubprocessError):
             pass
 
-    # Include any upgradable APT packages not already in list
-    seen_apt = {a["name"] for a in apps if a["manager"] == "apt"}
-    for pkg_name, upd in upgradable_map.items():
-        if pkg_name not in seen_apt:
-            apps.append({
-                "name": _sanitise(pkg_name),
-                "manager": "apt",
-                "installed_version": _sanitise(upd.get("installed_version") or "—"),
-                "candidate_version": _sanitise(upd.get("candidate_version") or "—"),
-                "update_available": True,
-                "security": upd.get("security"),
-                "section": "",
-                "kind": "os_package",
-            })
+        for pkg_name, upd in upgradable_map.items():
+            if pkg_name not in seen_apt:
+                seen_apt.add(pkg_name)
+                apps.append({
+                    "name": _sanitise(pkg_name),
+                    "manager": "apt",
+                    "installed_version": _sanitise(upd.get("installed_version") or "—"),
+                    "candidate_version": _sanitise(upd.get("candidate_version") or "—"),
+                    "update_available": True,
+                    "security": upd.get("security"),
+                    "section": "",
+                    "kind": "os_package",
+                })
 
-    # 2. Flatpak apps
-    flatpak_bin = shutil.which("flatpak")
+    # 2. Flatpak apps (preserve user vs system installation)
+    flatpak_bin = _trusted_which("flatpak", "flatpak")
     if flatpak_bin:
         managers.append("flatpak")
         try:
             res = subprocess.run(
                 [flatpak_bin, "list", "--app", "--columns=application,name,version,installation"],
-                capture_output=True, text=True, timeout=10, check=False, env=minimal_env("flatpak"),
+                stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, timeout=5, check=False, env=minimal_env("flatpak"),
             )
             if res.returncode == 0:
                 for line in res.stdout.splitlines():
@@ -270,10 +385,12 @@ def _discover_linux_apps(upgradable_map: dict[str, dict[str, Any]]) -> tuple[lis
                     app_id = parts[0].strip()
                     display = parts[1].strip() or app_id
                     version = parts[2].strip() if len(parts) > 2 and parts[2].strip() else "installed"
+                    install_scope = parts[3].strip().lower() if len(parts) > 3 and parts[3].strip() else "system"
                     apps.append({
                         "name": _sanitise(display),
                         "package_id": _sanitise(app_id),
                         "manager": "flatpak",
+                        "installation": "user" if "user" in install_scope else "system",
                         "installed_version": _sanitise(version),
                         "candidate_version": None,
                         "update_available": False,
@@ -284,14 +401,15 @@ def _discover_linux_apps(upgradable_map: dict[str, dict[str, Any]]) -> tuple[lis
         except (OSError, subprocess.SubprocessError):
             pass
 
-    # 3. Snap apps
-    snap_bin = shutil.which("snap")
-    if snap_bin:
+    # 3. Snap apps (only query if snapd socket exists, with short 2.5s timeout so API never hangs)
+    snap_bin = _trusted_which("snap", "snap")
+    if snap_bin and Path("/run/snapd.socket").exists():
         managers.append("snap")
         try:
             res = subprocess.run(
                 [snap_bin, "list"],
-                capture_output=True, text=True, timeout=10, check=False, env=minimal_env("snap"),
+                stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, timeout=2.5, check=False, env=minimal_env("snap"),
             )
             if res.returncode == 0:
                 lines = res.stdout.splitlines()
@@ -317,13 +435,14 @@ def _discover_linux_apps(upgradable_map: dict[str, dict[str, Any]]) -> tuple[lis
 def _discover_macos_apps(upgradable_map: dict[str, dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
     apps: list[dict[str, Any]] = []
     managers: list[str] = []
-    brew_bin = shutil.which("brew")
+    brew_bin = _trusted_which("brew", "brew")
     if brew_bin:
         managers.append("brew")
         try:
             res = subprocess.run(
                 [brew_bin, "list", "--versions"],
-                capture_output=True, text=True, timeout=15, check=False, env=minimal_env("brew"),
+                stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, timeout=10, check=False, env=minimal_env("brew"),
             )
             if res.returncode == 0:
                 for line in res.stdout.splitlines():
@@ -402,7 +521,7 @@ def discover_installed_apps(
     updates_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return installed Hermes plugins, MCP servers, and OS apps/packages."""
-    hermes_plugins, mcp_servers = discover_hermes_plugins(settings, inventory_data)
+    hermes_plugins, mcp_servers, discovery_approved = discover_hermes_plugins(settings, inventory_data)
 
     upgradable_map: dict[str, dict[str, Any]] = {}
     if isinstance(updates_data, dict):
@@ -417,18 +536,17 @@ def discover_installed_apps(
     else:
         os_apps, managers = _discover_linux_apps(upgradable_map)
 
-    # Sort OS apps: security updates first, then other updates, then alphabetical
     os_apps.sort(key=lambda a: (
         0 if a.get("security") is True else (1 if a.get("update_available") else 2),
         a["name"].lower(),
     ))
 
-    # Cap list to keep UI snappy while preserving accurate total count
     total_os_apps = len(os_apps)
     updatable_count = sum(1 for a in os_apps if a.get("update_available"))
     security_count = sum(1 for a in os_apps if a.get("security") is True)
 
     return {
+        "discovery_approved": discovery_approved,
         "hermes_plugins": hermes_plugins,
         "mcp_servers": mcp_servers,
         "os_apps": os_apps[:500],
@@ -451,30 +569,39 @@ def run_update(
     *,
     settings: dict[str, Any] | None = None,
     inventory_data: dict[str, Any] | None = None,
+    installation: str | None = None,
 ) -> dict[str, Any]:
-    """Execute a safe, allowlisted update for a Hermes plugin, Flatpak app, or OS package.
+    """Execute a safe, allowlisted update for a Hermes plugin, Flatpak/Brew app, or OS package.
 
-    Never uses shell=True. When OS-level root privileges are required and no interactive
-    Polkit prompt is available, returns status='needs_elevation' with the exact command.
+    Never uses shell=True, passes stdin=DEVNULL, and validates target_name strictly per manager.
     """
     allowed_types = {"hermes_plugin", "hermes_plugins_all", "flatpak", "brew", "os_package", "os_all"}
     if target_type not in allowed_types:
         return {"ok": False, "status": "invalid", "message": f"Unsupported update target type: {target_type}"}
 
-    if target_name is not None:
-        if not isinstance(target_name, str) or not _SAFE_NAME_RE.fullmatch(target_name):
-            return {"ok": False, "status": "invalid", "message": "Invalid package or plugin name."}
+    valid, err_msg = _validate_target_name(target_type, target_name)
+    if not valid:
+        return {"ok": False, "status": "invalid", "message": err_msg}
 
     # 1. Hermes plugin updates (single or all)
     if target_type in ("hermes_plugin", "hermes_plugins_all"):
-        hermes_bin = shutil.which("hermes")
+        plugins, _, approved = discover_hermes_plugins(settings, inventory_data)
+        if not approved:
+            return {
+                "ok": False,
+                "status": "denied",
+                "message": "Hermes root discovery is not approved in setup. Approve hermes_root via 'warden setup' first.",
+            }
+        hermes_bin = _trusted_which("hermes", "hermes")
         if hermes_bin:
-            argv = [hermes_bin, "plugins", "update"]
-            if target_type == "hermes_plugin" and target_name:
-                argv.append(target_name)
+            if target_type == "hermes_plugin":
+                argv = [hermes_bin, "plugins", "update", "--", str(target_name)]
+            else:
+                argv = [hermes_bin, "plugins", "update", "--yes"]
             try:
                 res = subprocess.run(
-                    argv, capture_output=True, text=True, timeout=60, check=False, env=minimal_env("hermes"),
+                    argv, stdin=subprocess.DEVNULL,
+                    capture_output=True, text=True, timeout=60, check=False, env=minimal_env("hermes"),
                 )
                 out = _sanitise((res.stdout or "") + ("\n" + res.stderr if res.stderr else "")).strip()[:2000]
                 if res.returncode == 0:
@@ -482,35 +609,42 @@ def run_update(
                         "ok": True,
                         "status": "updated",
                         "message": out or f"Updated {target_name or 'all Hermes plugins'} successfully.",
-                        "command": " ".join(argv),
+                        "command": " ".join(shlex.quote(a) for a in argv),
                     }
                 return {
                     "ok": False,
                     "status": "failed",
                     "message": out or f"hermes plugins update exited with code {res.returncode}.",
-                    "command": " ".join(argv),
+                    "command": " ".join(shlex.quote(a) for a in argv),
                 }
             except (OSError, subprocess.TimeoutExpired) as exc:
                 return {"ok": False, "status": "failed", "message": f"Plugin update failed: {exc}"}
 
-        # Fallback: git pull --ff-only for git-backed plugin directories
-        plugins, _ = discover_hermes_plugins(settings, inventory_data)
-        targets = [p for p in plugins if p.get("git_backed") and (target_type == "hermes_plugins_all" or p["name"] == target_name)]
-        git_bin = shutil.which("git")
-        if not targets or not git_bin:
-            cmd = f"hermes plugins update {target_name}" if target_name else "hermes plugins update"
+        # Fallback: git pull --ff-only for git-backed plugin directories under consented hermes_root
+        consented_root = Path(settings["hermes_root"]) if (isinstance(settings, dict) and settings.get("hermes_root")) else None
+        targets = [
+            p for p in plugins
+            if p.get("git_backed") and (target_type == "hermes_plugins_all" or p["id"] == target_name or p["name"] == target_name)
+        ]
+        git_bin = _trusted_which("git", "git")
+        if not targets or not git_bin or consented_root is None:
+            cmd = f"hermes plugins update {shlex.quote(str(target_name))}" if target_name else "hermes plugins update"
             return {
                 "ok": False,
                 "status": "unavailable",
-                "message": "Hermes CLI not found on PATH and plugin is not git-backed. Run the command in your terminal.",
+                "message": "Hermes CLI not found and plugin is not git-backed. Run the command in your terminal.",
                 "command": cmd,
             }
         results = []
         all_ok = True
         for p in targets:
+            plugin_path = consented_root / "plugins" / p["id"]
+            if not plugin_path.is_dir() or plugin_path.is_symlink():
+                continue
             try:
                 res = subprocess.run(
-                    [git_bin, "-C", p["path"], "pull", "--ff-only"],
+                    [git_bin, "-C", str(plugin_path), "-c", "core.hooksPath=/dev/null", "-c", "credential.helper=", "pull", "--ff-only"],
+                    stdin=subprocess.DEVNULL,
                     capture_output=True, text=True, timeout=45, check=False, env=minimal_env("git"),
                 )
                 msg = _sanitise((res.stdout or res.stderr or "").strip())[:400]
@@ -526,63 +660,79 @@ def run_update(
             "message": "\n".join(results),
         }
 
-    # 2. Flatpak user app update
+    # 2. Flatpak app update (respect user vs system installation)
     if target_type == "flatpak":
-        flatpak_bin = shutil.which("flatpak")
+        flatpak_bin = _trusted_which("flatpak", "flatpak")
         if not flatpak_bin:
             return {"ok": False, "status": "unavailable", "message": "flatpak is not installed."}
-        argv = [flatpak_bin, "update", "--user", "-y"]
-        if target_name:
-            argv.append(target_name)
+        if installation == "system":
+            cmd_str = f"sudo flatpak update -y {shlex.quote(str(target_name))}"
+            return {
+                "ok": False,
+                "status": "needs_elevation",
+                "message": "System-wide Flatpak apps require administrator privileges. Run this command in your terminal:",
+                "command": cmd_str,
+            }
+        argv = [flatpak_bin, "update", "--user", "-y", "--", str(target_name)]
         try:
-            res = subprocess.run(argv, capture_output=True, text=True, timeout=120, check=False, env=minimal_env("flatpak"))
+            res = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120, check=False, env=minimal_env("flatpak"))
             out = _sanitise((res.stdout or "") + ("\n" + res.stderr if res.stderr else "")).strip()[:2000]
             return {
                 "ok": res.returncode == 0,
                 "status": "updated" if res.returncode == 0 else "failed",
                 "message": out or ("Flatpak updated." if res.returncode == 0 else "Flatpak update failed."),
-                "command": " ".join(argv),
+                "command": " ".join(shlex.quote(a) for a in argv),
             }
         except (OSError, subprocess.TimeoutExpired) as exc:
             return {"ok": False, "status": "failed", "message": f"Flatpak update failed: {exc}"}
 
-    # 3. Homebrew update (macOS/Linux)
+    # 3. Homebrew update
     if target_type == "brew":
-        brew_bin = shutil.which("brew")
+        brew_bin = _trusted_which("brew", "brew")
         if not brew_bin:
             return {"ok": False, "status": "unavailable", "message": "Homebrew is not installed."}
-        argv = [brew_bin, "upgrade"] + ([target_name] if target_name else [])
+        argv = [brew_bin, "upgrade", "--", str(target_name)]
         try:
-            res = subprocess.run(argv, capture_output=True, text=True, timeout=120, check=False, env=minimal_env("brew"))
+            res = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120, check=False, env=minimal_env("brew"))
             out = _sanitise((res.stdout or "") + ("\n" + res.stderr if res.stderr else "")).strip()[:2000]
             return {
                 "ok": res.returncode == 0,
                 "status": "updated" if res.returncode == 0 else "failed",
                 "message": out or ("Homebrew updated." if res.returncode == 0 else "Homebrew update failed."),
-                "command": " ".join(argv),
+                "command": " ".join(shlex.quote(a) for a in argv),
             }
         except (OSError, subprocess.TimeoutExpired) as exc:
             return {"ok": False, "status": "failed", "message": f"Homebrew update failed: {exc}"}
 
     # 4. OS package / system update
     if _platform.NAME == "linux":
+        apt_get = _trusted_which("apt-get", "apt")
+        if not apt_get:
+            return {
+                "ok": False,
+                "status": "unavailable",
+                "message": "APT (apt-get) was not found on this Linux distribution. Use your system package manager in a terminal.",
+            }
+        non_interactive_opts = [
+            "-o", "Dpkg::Options::=--force-confdef",
+            "-o", "Dpkg::Options::=--force-confold",
+        ]
         if target_type == "os_package" and target_name:
-            cmd_str = f"sudo apt-get update && sudo apt-get install --only-upgrade -y {target_name}"
-            apt_argv = ["/usr/bin/apt-get", "install", "--only-upgrade", "-y", target_name]
+            cmd_str = f"sudo apt-get update && sudo apt-get install --only-upgrade -y -- {shlex.quote(target_name)}"
+            apt_argv = [apt_get, *non_interactive_opts, "install", "--only-upgrade", "-y", "--", target_name]
         else:
             cmd_str = "sudo apt-get update && sudo apt-get upgrade -y"
-            apt_argv = ["/usr/bin/apt-get", "upgrade", "-y"]
+            apt_argv = [apt_get, *non_interactive_opts, "upgrade", "-y"]
 
-        is_root = hasattr(os, "geteuid") and os.geteuid() == 0
         has_desktop = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
-        pkexec_bin = shutil.which("pkexec") if has_desktop else None
+        pkexec_bin = _trusted_which("pkexec", "pkexec-apt") if has_desktop else None
 
-        if is_root or pkexec_bin:
-            prefix = [] if is_root else [pkexec_bin]
+        if pkexec_bin:
             try:
                 res = subprocess.run(
-                    prefix + apt_argv,
-                    capture_output=True, text=True, timeout=180, check=False, env=minimal_env("apt"),
+                    [pkexec_bin, *apt_argv],
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True, text=True, timeout=180, check=False, env=minimal_env("pkexec-apt"),
                 )
                 out = _sanitise((res.stdout or "") + ("\n" + res.stderr if res.stderr else "")).strip()[:2000]
                 if res.returncode == 0:
@@ -604,7 +754,7 @@ def run_update(
         }
 
     if _platform.NAME == "macos":
-        cmd_str = f"sudo softwareupdate -i {target_name}" if target_name else "sudo softwareupdate -i -a"
+        cmd_str = f"sudo softwareupdate -i {shlex.quote(str(target_name))}" if target_name else "sudo softwareupdate -i -a"
         return {
             "ok": False,
             "status": "needs_elevation",
@@ -612,10 +762,9 @@ def run_update(
             "command": cmd_str,
         }
 
-    cmd_str = f"winget upgrade --id {target_name}" if target_name else "winget upgrade --all"
     return {
         "ok": False,
         "status": "needs_elevation",
-        "message": "Run this command in an elevated PowerShell terminal to install Windows updates:",
-        "command": cmd_str,
+        "message": "Install Windows updates from Settings → Windows Update or an elevated PowerShell terminal.",
+        "command": "winget upgrade --all",
     }

@@ -1192,9 +1192,21 @@ class WebActionsAndAppsTest(unittest.TestCase):
         code_av, data_av = self._request("GET", "/api/av")
         self.assertEqual(code_av, 200)
         self.assertTrue(data_av["builtin_heuristics"])
+        self.assertNotIn("binary", data_av)
 
-        code_apps, data_apps = self._request("GET", "/api/apps")
+        from unittest.mock import patch
+        fake_apps = {
+            "discovery_approved": False,
+            "hermes_plugins": [],
+            "mcp_servers": [],
+            "os_apps": [],
+            "managers": [],
+            "summary": {"plugins_count": 0, "mcp_count": 0, "os_apps_count": 0, "os_apps_shown": 0, "updatable_count": 0, "security_updates_count": 0},
+        }
+        with patch("custodian.apps.discover_installed_apps", return_value=fake_apps):
+            code_apps, data_apps = self._request("GET", "/api/apps")
         self.assertEqual(code_apps, 200)
+        self.assertFalse(data_apps["discovery_approved"])
         self.assertIn("hermes_plugins", data_apps)
         self.assertIn("os_apps", data_apps)
         self.assertIn("summary", data_apps)
@@ -1208,6 +1220,12 @@ class WebActionsAndAppsTest(unittest.TestCase):
         code_no_auth, _ = self._request("POST", "/api/actions/scan", {}, with_auth=False)
         self.assertEqual(code_no_auth, 401)
 
+        # Unauthenticated logout must NOT revoke active session
+        code_unauth_logout, _ = self._request("POST", "/api/logout", {}, with_auth=False)
+        self.assertEqual(code_unauth_logout, 200)
+        code_still_valid, _ = self._request("GET", "/api/av")
+        self.assertEqual(code_still_valid, 200)
+
         # Valid scan action -> 200
         code_scan, res_scan = self._request("POST", "/api/actions/scan", {})
         self.assertEqual(code_scan, 200)
@@ -1220,11 +1238,17 @@ class WebActionsAndAppsTest(unittest.TestCase):
         self.assertTrue(res_set["ok"])
         self.assertFalse(res_set["settings"]["check_permissions"])
 
-        # Invalid update target rejected cleanly
-        code_upd, res_upd = self._request("POST", "/api/actions/update", {"target_type": "invalid_type"})
-        self.assertEqual(code_upd, 200)
-        self.assertFalse(res_upd["ok"])
-        self.assertEqual(res_upd["status"], "invalid")
+        # Invalid update target and APT package removal suffix rejected with 400
+        for bad_body in (
+            {"target_type": "invalid_type"},
+            {"target_type": "os_package", "target_name": None},
+            {"target_type": "os_package", "target_name": "tmux-"},
+            {"target_type": "hermes_plugin", "target_name": "../escape"},
+        ):
+            code_upd, res_upd = self._request("POST", "/api/actions/update", bad_body)
+            self.assertEqual(code_upd, 400)
+            self.assertFalse(res_upd["ok"])
+            self.assertEqual(res_upd["status"], "invalid")
 
 
 if __name__ == "__main__":

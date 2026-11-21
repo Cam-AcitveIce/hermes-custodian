@@ -262,6 +262,26 @@ def test_values_that_cannot_be_environment_strings_are_dropped():
     assert set(env) == {'PATH', 'LC_ALL', 'LANG'}
 
 
+def test_new_scanner_and_apps_specs_stay_minimal_and_root_path(parent):
+    parent('HOME', '/home/fixture')
+    parent('DISPLAY', ':0')
+    parent('WAYLAND_DISPLAY', 'wayland-0')
+    parent('DBUS_SESSION_BUS_ADDRESS', 'unix:path=/run/user/1000/bus')
+    for cmd in ('av', 'yara'):
+        env = envmod.minimal_env(cmd)
+        assert env == POSIX_BASE
+        _assert_no_leak(env)
+    for cmd in ('git', 'hermes', 'brew'):
+        env = envmod.minimal_env(cmd)
+        assert env == {**POSIX_BASE, 'HOME': '/home/fixture'}
+        _assert_no_leak(env)
+    pk_env = envmod.minimal_env('pkexec-apt')
+    assert pk_env['PATH'] == POSIX_PATH
+    assert pk_env['DISPLAY'] == ':0'
+    assert pk_env['WAYLAND_DISPLAY'] == 'wayland-0'
+    _assert_no_leak(pk_env)
+
+
 def test_every_allowlist_is_free_of_loader_proxy_and_credential_names():
     forbidden = ('KEY', 'TOKEN', 'SECRET', 'PASSWORD', 'PROXY', 'PYTHON', 'LD_', 'DYLD_', 'PSMODULEPATH')
     for command in envmod.COMMANDS:
@@ -305,8 +325,11 @@ def test_every_production_subprocess_call_passes_an_explicit_env():
                 spawn_calls += 1
                 env = [kw.value for kw in node.keywords if kw.arg == 'env']
                 assert len(env) == 1 and _is_minimal_env_call(env[0]), where
-    # systemctl, launchctl, schtasks, native policy, apt, softwareupdate, powershell, ps
-    assert spawn_calls == 8
+    # 8 core (systemctl, launchctl, schtasks, native policy, apt, softwareupdate, powershell, ps)
+    # + 4 scanner (clamav --version, clamav scan, windows defender, yara)
+    # + 11 apps (git config, apt-mark, dpkg-query, flatpak list, snap list, brew list,
+    #            hermes update, git pull, flatpak update, brew upgrade, pkexec apt-get)
+    assert spawn_calls == 23
 
 
 def _is_minimal_env_call(node):

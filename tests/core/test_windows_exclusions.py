@@ -37,10 +37,10 @@ def test_windows_excluded_finding_leaves_scope(tmp_path, monkeypatch, relative, 
     monkeypatch.setattr(_platform, "NAME", "windows")
     monkeypatch.setattr(policy, "bounded_snapshot", snapshot)
     monkeypatch.setattr(_platform, "access_exposure", lambda item: {"mode": 0o644})
-    engine.setup({"watched_paths": [str(scope)]})
+    engine.setup({"watched_paths": [str(scope)], "check_permissions": True, "security_scan": False})
     assert len(engine.scan()["findings"]) == 1
     assert engine.findings()[0]["status"] == "open"
-    engine.setup({"watched_paths": [str(scope)], "exclusions": [pattern]})
+    engine.setup({"watched_paths": [str(scope)], "exclusions": [pattern], "check_permissions": True, "security_scan": False})
     assert engine.scan()["complete"]
     assert Engine(engine.store.root).findings()[0]["status"] == "out_of_scope"
     kinds = [event["kind"] for event in engine.events()]

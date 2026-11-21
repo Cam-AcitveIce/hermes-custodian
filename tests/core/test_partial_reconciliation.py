@@ -12,7 +12,7 @@ def test_partial_scan_resolves_checked_path_without_resolving_unseen(tmp_path):
     a = project / '.env.a'; a.write_text('# synthetic'); a.chmod(0o644)
     b = project / '.env.b'; b.write_text('# synthetic'); b.chmod(0o644)
     engine = Engine(tmp_path / 'state')
-    engine.setup({'watched_paths': [str(project)]})
+    engine.setup({'watched_paths': [str(project)], 'check_permissions': True})
     initial = engine.scan()
     assert initial['complete']
     old = {f['path']:f for f in engine.findings()}

@@ -59,16 +59,18 @@ _SPECS = {
     'launchctl': ('posix', None, ()),
     'softwareupdate': ('posix', None, ()),
     'ps': ('posix', None, ()),
-    # Local security & antivirus scanners (ClamAV, YARA)
-    'av': ('posix', POSIX_SYSTEM_PATH + ':/usr/local/bin:/opt/homebrew/bin', ()),
-    'yara': ('posix', POSIX_SYSTEM_PATH + ':/usr/local/bin:/opt/homebrew/bin', ()),
+    # Local security & antivirus scanners (ClamAV, YARA) — root-owned system PATH only
+    'av': ('posix', None, ()),
+    'yara': ('posix', None, ()),
     # Plugin and OS app discovery / user-triggered updates
-    'git': ('posix', POSIX_SYSTEM_PATH + ':/usr/local/bin:/opt/homebrew/bin', ('HOME',)),
-    'hermes': ('posix', POSIX_SYSTEM_PATH + ':/usr/local/bin:/opt/homebrew/bin', ('HOME', 'HERMES_HOME')),
-    'flatpak': ('posix', POSIX_SYSTEM_PATH + ':/usr/local/bin', ('HOME', 'XDG_DATA_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS')),
+    'git': ('posix', None, ('HOME',)),
+    'hermes': ('posix', None, ('HOME',)),
+    'flatpak': ('posix', None, ('HOME', 'XDG_DATA_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS')),
     'snap': ('posix', POSIX_SYSTEM_PATH + ':/snap/bin', ()),
-    'brew': ('posix', POSIX_SYSTEM_PATH + ':/usr/local/bin:/opt/homebrew/bin', ('HOME',)),
+    'brew': ('posix', None, ('HOME',)),
+    'pkexec-apt': ('posix', None, ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR', 'XDG_SESSION_ID')),
     'schtasks': ('windows', None, _WINDOWS_SYSTEM_NAMES),
+    'defender': ('windows', None, _WINDOWS_SYSTEM_NAMES),
     'powershell': ('windows', None, _WINDOWS_SYSTEM_NAMES + _WINDOWS_PROFILE_NAMES),
 }
 COMMANDS = frozenset(_SPECS)

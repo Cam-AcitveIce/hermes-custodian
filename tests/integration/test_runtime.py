@@ -19,7 +19,7 @@ def test_real_cli_persists_and_detects_regression(tmp_path):
     else:
         credential.chmod(0o600)
     state = tmp_path / 'state'
-    Engine(state).setup({'watched_paths': [str(scope)], 'interval_seconds': 10})
+    Engine(state).setup({'watched_paths': [str(scope)], 'interval_seconds': 10, 'check_permissions': True})
     command = [sys.executable, '-m', 'custodian.cli', '--state-dir', str(state)]
     first = subprocess.run(command + ['scan'], capture_output=True, text=True, check=True)
     initial = json.loads(first.stdout)

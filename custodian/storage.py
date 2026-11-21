@@ -106,7 +106,7 @@ class Storage:
         value = json.loads(row[0])
         return value['files'] if value['signature'] == signature else None
 
-    def record_scan(self, result, files, signature, retention_days, covered=None):
+    def record_scan(self, result, files, signature, retention_days, covered=None, finding_check=None):
         with self.connection() as db:
             previous = {row[0]: json.loads(row[1]) for row in db.execute('SELECT id,data FROM findings')}
             seen = set()
@@ -122,6 +122,18 @@ class Storage:
                                (result['finished_at'], 'finding_opened', finding['path'], finding['title']))
             for key, old in previous.items():
                 if key in seen or old['status'] not in ('open', 'out_of_scope'):
+                    continue
+                # If finding_check is provided, ask whether this finding's detector was active and inspected its path.
+                # Returns: 'active_inspected' (can resolve), 'disabled' (mark out_of_scope), or 'uninspected' (keep status).
+                check_state = finding_check(old) if finding_check is not None else None
+                if check_state == 'disabled':
+                    if old['status'] != 'out_of_scope':
+                        old['status'] = 'out_of_scope'
+                        db.execute('UPDATE findings SET data=? WHERE id=?', (json.dumps(old), key))
+                        db.execute('INSERT INTO events(timestamp,kind,path,summary) VALUES (?,?,?,?)',
+                                   (result['finished_at'], 'finding_out_of_scope', old['path'], old['title']))
+                    continue
+                if check_state == 'uninspected':
                     continue
                 # Exact-path metadata is sufficient to reassess that observation.
                 # Never infer removal/safety for an unseen path in a partial scan.

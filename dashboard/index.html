@@ -178,6 +178,7 @@
             <div class="skeleton-card"></div>
             <div class="skeleton-card"></div>
             <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
           </div>
         </section>
 
@@ -246,8 +247,8 @@
               </div>
               <div class="fact-card">
                 <div class="fact-label">Antivirus &amp; Scanner</div>
-                <div id="fact-av-val" class="fact-value">Active</div>
-                <div id="fact-av-sub" class="fact-sub mono">Built-in threat scanner</div>
+                <div id="fact-av-val" class="fact-value">—</div>
+                <div id="fact-av-sub" class="fact-sub mono">—</div>
               </div>
               <div class="fact-card">
                 <div class="fact-label">OS updates</div>
@@ -410,6 +411,7 @@
                 <tbody id="apps-os-tbody"></tbody>
               </table>
             </div>
+            <div id="apps-os-truncation" class="compact-empty-row is-hidden"></div>
           </div>
         </section>
 
@@ -434,23 +436,23 @@
               <label class="toggle-row">
                 <div class="toggle-copy">
                   <span class="toggle-title">Built-in Antivirus &amp; Threat Scanner</span>
-                  <span class="toggle-desc">Detects malware signatures (EICAR, IOC hashes), reverse shells, droppers, disguised binaries, Trojan Source Unicode, and AI prompt-injection payloads.</span>
+                  <span id="desc-security-scan" class="toggle-desc">Detects malware signatures (EICAR, IOC hashes), reverse shells, droppers, disguised binaries, Trojan Source Unicode, and AI prompt-injection payloads.</span>
                 </div>
-                <input type="checkbox" id="toggle-security-scan" class="toggle-input" checked>
+                <input type="checkbox" id="toggle-security-scan" class="toggle-input" role="switch" aria-describedby="desc-security-scan" checked>
               </label>
               <label class="toggle-row">
                 <div class="toggle-copy">
                   <span class="toggle-title">System Antivirus Integration (ClamAV / Windows Defender)</span>
-                  <span class="toggle-desc">Automatically runs ClamAV or Windows Defender alongside built-in heuristics when installed on this machine.</span>
+                  <span id="desc-system-av" class="toggle-desc">Automatically runs ClamAV or Windows Defender alongside built-in heuristics when installed on this machine.</span>
                 </div>
-                <input type="checkbox" id="toggle-system-av" class="toggle-input" checked>
+                <input type="checkbox" id="toggle-system-av" class="toggle-input" role="switch" aria-describedby="desc-system-av" checked>
               </label>
               <label class="toggle-row">
                 <div class="toggle-copy">
                   <span class="toggle-title">Sensitive File Permission Checks (auth / .env mode bits)</span>
-                  <span class="toggle-desc">Optional. Off by default to avoid permission noise on auth and config files.</span>
+                  <span id="desc-check-permissions" class="toggle-desc">Optional. Off by default to avoid permission noise on auth and config files.</span>
                 </div>
-                <input type="checkbox" id="toggle-check-permissions" class="toggle-input">
+                <input type="checkbox" id="toggle-check-permissions" class="toggle-input" role="switch" aria-describedby="desc-check-permissions">
               </label>
             </div>
           </div>
@@ -553,7 +555,7 @@
               </div>
               <div class="health-note">
                 <p id="health-updates-summary"><strong>Security classification unknown:</strong> packages in cached lists have unknown classification.</p>
-                <p class="health-policy">Warden never installs updates.</p>
+                <p class="health-policy">Use Plugins &amp; Apps to manage plugin updates or get package update commands.</p>
               </div>
               <div class="table-wrap">
                 <table class="data-table" aria-label="Upgradable packages">
@@ -591,6 +593,7 @@
       <div class="drawer-body">
         <div class="drawer-badges">
           <span id="drawer-severity" class="sev-badge is-high">HIGH</span>
+          <span id="drawer-category" class="mono-tag">security</span>
           <span id="drawer-status" class="status-pill">open</span>
         </div>
 

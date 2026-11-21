@@ -919,7 +919,7 @@ body {
 
 .facts-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -1657,7 +1657,7 @@ body {
 
 .skeleton-facts {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -1853,6 +1853,11 @@ body {
   background-color: var(--sev-high-bg);
 }
 
+.apps-action-banner.is-warn {
+  border-color: var(--sev-med-border);
+  background-color: var(--sev-med-bg);
+}
+
 .apps-action-banner-head {
   display: flex;
   align-items: center;
@@ -1871,12 +1876,15 @@ body {
 .apps-action-cmd-wrap {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 10px;
 }
 
 .apps-action-cmd-wrap code {
   flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .apps-chip-list {
@@ -1956,9 +1964,17 @@ body {
   align-items: center;
   gap: 3px;
   font-family: var(--font-sans);
-  font-size: 0.68rem;
+  font-size: 0.65rem;
   cursor: pointer;
+  min-width: 0;
   transition: color 150ms ease;
+}
+
+.mobile-tab span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mobile-tab.is-active {
@@ -1980,6 +1996,7 @@ body {
   .sidebar .status-strip-val,
   .sidebar .status-strip-mono,
   .sidebar .status-strip-sub,
+  .sidebar .sidebar-signout-btn,
   .sidebar .sidebar-toggle {
     display: none;
   }

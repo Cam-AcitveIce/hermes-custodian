@@ -13,7 +13,7 @@ def test_generic_source_directories_stay_unread_but_not_high_findings(tmp_path):
         folder = project / name; folder.mkdir(); folder.chmod(0o755)
         (folder / 'source.py').write_text('synthetic source only')
     secret = project / '.env'; secret.write_text('# synthetic fixture'); secret.chmod(0o644)
-    engine = Engine(tmp_path / 'state'); engine.setup({'watched_paths': [str(project)]})
+    engine = Engine(tmp_path / 'state'); engine.setup({'watched_paths': [str(project)], 'check_permissions': True})
     scan = engine.scan()
     assert policy.is_sensitive(project / 'auth')
     assert policy.is_sensitive(project / 'tokens')

@@ -58,7 +58,7 @@ def test_engine_versions_mode_evidence_and_preserves_history(tmp_path, monkeypat
     secret.write_text('SYNTHETIC TEST FIXTURE')
     secret.chmod(0o640)
     engine = Engine(tmp_path / 'state')
-    engine.setup({'watched_paths': [str(scope)]})
+    engine.setup({'watched_paths': [str(scope)], 'check_permissions': True})
     # Seed a legacy finding through the old backend contract.
     with monkeypatch.context() as patch:
         patch.setattr(_platform, 'access_exposure', lambda item: {'mode': 0o640})

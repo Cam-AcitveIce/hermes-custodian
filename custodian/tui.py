@@ -138,10 +138,17 @@ class SetupScreen(Screen):
                 watched = [line.strip() for line in self.query_one('#watched', TextArea).text.splitlines() if line.strip()]
                 if not (profiles or watched):
                     raise ValueError('Select at least one profile or directory.')
+                try:
+                    existing = app.engine.settings()
+                except (ValueError, OSError, RuntimeError):
+                    existing = {}
                 settings = {'schema_version': 1, 'profiles': profiles, 'watched_paths': watched,
                     'exclusions': [part.strip() for part in self.query_one('#excluded', Input).value.split(',') if part.strip()],
                     'interval_seconds': int(self.query_one('#interval', Input).value),
-                    'max_files': 2000, 'max_file_bytes': 2 * 1024 * 1024, 'retention_days': 30}
+                    'max_files': 2000, 'max_file_bytes': 2 * 1024 * 1024, 'retention_days': 30,
+                    'check_permissions': bool(existing.get('check_permissions', False)),
+                    'security_scan': bool(existing.get('security_scan', True)),
+                    'use_system_av': bool(existing.get('use_system_av', True))}
                 if self.query_one('#consent', Checkbox).value:
                     settings['hermes_root'] = self.query_one('#hermes-root', Input).value
                 app.engine.setup(settings)

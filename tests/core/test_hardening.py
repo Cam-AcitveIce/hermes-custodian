@@ -47,7 +47,7 @@ class ScanSerialisationTests(unittest.TestCase):
         self.secret = self.scope / '.env'
         self.secret.write_text('FIXTURE')
         self.state = self.root / 'state'
-        Engine(self.state).setup({'watched_paths': [str(self.scope)]})
+        Engine(self.state).setup({'watched_paths': [str(self.scope)], 'check_permissions': True, 'security_scan': False})
 
     def _overlap(self, mutate):
         """Scan A captures, mutate(), scan B runs, then A resumes."""
@@ -138,7 +138,7 @@ class ScopeLifecycleTests(unittest.TestCase):
         exposure.start()
         self.addCleanup(exposure.stop)
         self.engine = Engine(self.root / 'state')
-        self.engine.setup({'watched_paths': [str(self.scope_a)]})
+        self.engine.setup({'watched_paths': [str(self.scope_a)], 'check_permissions': True, 'security_scan': False})
         self.assertEqual(len(self.engine.scan()['findings']), 1)
 
     def _only(self):
@@ -147,7 +147,7 @@ class ScopeLifecycleTests(unittest.TestCase):
         return findings[0]
 
     def test_dropping_scope_marks_unchanged_finding_out_of_scope_not_resolved(self):
-        self.engine.setup({'watched_paths': [str(self.scope_b)]})
+        self.engine.setup({'watched_paths': [str(self.scope_b)], 'check_permissions': True, 'security_scan': False})
         self.assertTrue(self.engine.scan()['complete'])
         self.assertEqual(self._only()['status'], 'out_of_scope')
         status = self.engine.status()
@@ -158,26 +158,26 @@ class ScopeLifecycleTests(unittest.TestCase):
         self.assertNotIn('finding_resolved', kinds)
 
     def test_excluding_path_marks_finding_out_of_scope(self):
-        self.engine.setup({'watched_paths': [str(self.scope_a)], 'exclusions': ['.env']})
+        self.engine.setup({'watched_paths': [str(self.scope_a)], 'exclusions': ['.env'], 'check_permissions': True, 'security_scan': False})
         self.assertTrue(self.engine.scan()['complete'])
         self.assertEqual(self._only()['status'], 'out_of_scope')
 
     def test_reevaluated_under_broader_covering_scope_still_resolves(self):
         self.exposed = False
-        self.engine.setup({'watched_paths': [str(self.scope_a), str(self.scope_b)], 'max_files': 500})
+        self.engine.setup({'watched_paths': [str(self.scope_a), str(self.scope_b)], 'max_files': 500, 'check_permissions': True, 'security_scan': False})
         self.assertTrue(self.engine.scan()['complete'])
         self.assertEqual(self._only()['status'], 'resolved')
 
     def test_out_of_scope_finding_reopens_or_resolves_when_scope_returns(self):
-        self.engine.setup({'watched_paths': [str(self.scope_b)]})
+        self.engine.setup({'watched_paths': [str(self.scope_b)], 'check_permissions': True, 'security_scan': False})
         self.engine.scan()
-        self.engine.setup({'watched_paths': [str(self.scope_a)]})
+        self.engine.setup({'watched_paths': [str(self.scope_a)], 'check_permissions': True, 'security_scan': False})
         self.engine.scan()
         self.assertEqual(self._only()['status'], 'open')
-        self.engine.setup({'watched_paths': [str(self.scope_b)]})
+        self.engine.setup({'watched_paths': [str(self.scope_b)], 'check_permissions': True, 'security_scan': False})
         self.engine.scan()
         self.exposed = False
-        self.engine.setup({'watched_paths': [str(self.scope_a)]})
+        self.engine.setup({'watched_paths': [str(self.scope_a)], 'check_permissions': True, 'security_scan': False})
         self.engine.scan()
         self.assertEqual(self._only()['status'], 'resolved')
 
@@ -301,7 +301,7 @@ class SensitiveSymlinkTests(unittest.TestCase):
         self.scope = self.root / 'scope'
         self.scope.mkdir()
         self.engine = Engine(self.root / 'state')
-        self.engine.setup({'watched_paths': [str(self.scope)]})
+        self.engine.setup({'watched_paths': [str(self.scope)], 'check_permissions': True})
 
     def test_sensitive_symlink_is_low_informational_and_regular_file_reworded(self):
         target = self.root / 'real-secret'

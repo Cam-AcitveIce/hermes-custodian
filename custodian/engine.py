@@ -99,7 +99,15 @@ class Engine:
             candidate = Path(path)
             if not any(root == candidate or root in candidate.parents for root in roots):
                 roots.append(candidate)
-        payload = [list(map(str, roots)), settings['exclusions'], settings['max_file_bytes'], settings['max_files']]
+        payload = [
+            list(map(str, roots)),
+            settings['exclusions'],
+            settings['max_file_bytes'],
+            settings['max_files'],
+            bool(settings.get('check_permissions', False)),
+            bool(settings.get('security_scan', True)),
+            bool(settings.get('use_system_av', True)),
+        ]
         signature = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
         return roots, signature
 
@@ -190,9 +198,11 @@ class Engine:
                                          'first_seen': started, 'last_seen': started, 'status': 'open',
                                          'scope_signature': signature})
         av_summary = None
+        inspected_paths: set[str] = set()
+        av_ran_ok = False
         if settings.get('security_scan', True):
             scanner = importlib.import_module('.scanner', __package__)
-            sec_findings, sec_errors, av_summary = scanner.scan_scope(
+            sec_findings, sec_errors, raw_av_summary = scanner.scan_scope(
                 roots,
                 files,
                 settings,
@@ -203,6 +213,11 @@ class Engine:
             )
             findings.extend(sec_findings)
             errors.extend(sec_errors)
+            inspected_paths = set(raw_av_summary.get('inspected_paths') or ())
+            sec_complete = bool(raw_av_summary.get('complete', True))
+            av_ran_ok = bool(raw_av_summary.get('system_av_used')) and sec_complete
+            complete = complete and sec_complete
+            av_summary = {k: v for k, v in raw_av_summary.items() if k != 'inspected_paths'}
         changes = []
         if baseline is not None:
             for path, item in sorted(files.items()):
@@ -219,8 +234,37 @@ class Engine:
                   'av_summary': av_summary,
                   'errors': [policy.sanitise_text(str(error)) for error in errors]}
         all_exclusions = settings['exclusions'] + [str(self.store.root)]
+        check_perms_enabled = bool(settings.get('check_permissions', False))
+        sec_scan_enabled = bool(settings.get('security_scan', True))
+        sys_av_enabled = bool(settings.get('use_system_av', True))
+
+        def _finding_check(old: dict) -> str:
+            cat = old.get('category') or (old.get('evidence') or {}).get('category')
+            is_perm = (
+                cat == 'permissions'
+                or (cat is None and any(k in str(old.get('title', '')).lower() for k in ('permission bits', 'accessible beyond its owner', 'symlink, target not followed')))
+            )
+            if is_perm:
+                return 'active_inspected' if check_perms_enabled else 'disabled'
+            if not sec_scan_enabled:
+                return 'disabled'
+            if cat == 'antivirus':
+                if not sys_av_enabled:
+                    return 'disabled'
+                # Only resolve AV findings if the file was removed or AV ran cleanly
+                if old['path'] not in files:
+                    return 'active_inspected' if complete else 'uninspected'
+                return 'active_inspected' if av_ran_ok else 'uninspected'
+            if cat == 'privilege_escalation':
+                return 'active_inspected'
+            # Built-in heuristic / IOC / YARA finding: only resolve if file is gone (complete scan) or was actually inspected
+            if old['path'] not in files:
+                return 'active_inspected' if complete else 'uninspected'
+            return 'active_inspected' if old['path'] in inspected_paths else 'uninspected'
+
         self.store.record_scan(result, files, signature, settings['retention_days'],
-                               covered=lambda p: self._is_covered(p, roots, all_exclusions))
+                               covered=lambda p: self._is_covered(p, roots, all_exclusions),
+                               finding_check=_finding_check)
         return result
 
     def updates(self) -> dict:
@@ -248,6 +292,12 @@ class Engine:
             current = self.settings()
         except (ValueError, OSError):
             current = None
+        if inventory_data is None and isinstance(current, dict) and current.get('hermes_root'):
+            try:
+                profiles = self.inventory(Path(current['hermes_root']))
+                inventory_data = {'discovery_approved': True, 'profiles': profiles}
+            except (ValueError, OSError):
+                inventory_data = None
         if updates_data is None:
             updates_data = self.updates()
         return apps_mod.discover_installed_apps(current, inventory_data=inventory_data, updates_data=updates_data)
@@ -259,9 +309,11 @@ class Engine:
         for key, val in patch.items():
             if type(val) is not bool:
                 raise ValueError(f'{key} must be a boolean')
-        current = dict(self.settings())
-        current.update(patch)
-        return self.setup(current)
+        with self.store.scan_lock(self.lock_timeout):
+            current = dict(self.settings())
+            current.update(patch)
+            self.store.save_settings(current)
+            return current
 
     def findings(self) -> list[dict]:
         return self.store.findings()

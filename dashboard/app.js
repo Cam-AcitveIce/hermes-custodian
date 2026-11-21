@@ -470,9 +470,11 @@
     selectedFindingId: null,
     currentData: null,
     appsData: null,
+    appsError: "",
     appsLoading: false,
     appsFilter: "all",
     appsSearch: "",
+    inflightUpdates: {},
     isScanning: false,
     pollTimer: null,
     isSubmittingLogin: false
@@ -772,9 +774,10 @@
     if (avVal && avSub) {
       const av = data.av_status || {};
       const enabled = av.security_scan_enabled !== false;
-      avVal.textContent = enabled ? (av.available ? ("Active + " + (av.label || "System AV")) : "Active (Built-in)") : "Paused";
+      const sysAvActive = Boolean(av.available && av.use_system_av !== false);
+      avVal.textContent = enabled ? (sysAvActive ? ("Active + " + (av.label || "System AV")) : "Active (Built-in)") : "Paused";
       const permLabel = av.check_permissions ? "Perm checks: ON" : "Perm checks: OFF";
-      avSub.textContent = (av.available ? "Signature + Heuristic AV" : "Heuristics + IOC + Agent security") + " · " + permLabel;
+      avSub.textContent = (sysAvActive ? "Signature + Heuristic AV" : "Heuristics + IOC + Agent") + " · " + permLabel;
     }
 
     const updVal = document.getElementById("fact-updates-val");
@@ -801,7 +804,7 @@
   function renderFindings(data) {
     const findings = data.findings;
     const openCount = data.open_findings.length;
-    const resolvedCount = findings.length - openCount;
+    const resolvedCount = findings.filter(function (f) { return f.status === "resolved"; }).length;
 
     document.querySelectorAll("[data-status-filter]").forEach(function (btn) {
       const fType = btn.getAttribute("data-status-filter");
@@ -836,6 +839,7 @@
         const hay = (
           f.id + " " +
           f.title + " " +
+          f.category + " " +
           f.path + " " +
           f.severity + " " +
           f.status + " " +
@@ -894,7 +898,12 @@
       const tdSev = makeEl("td");
       tdSev.appendChild(makeEl("span", "sev-badge " + findingSeverityClass(f), findingSeverityLabel(f)));
 
-      const tdTitle = makeEl("td", "finding-row-title", capitaliseTitle(f.title));
+      const tdTitle = makeEl("td", "finding-row-title");
+      tdTitle.appendChild(document.createTextNode(capitaliseTitle(f.title)));
+      if (f.category) {
+        const catTag = makeEl("span", "mono-tag apps-inline-badge", f.category);
+        tdTitle.appendChild(catTag);
+      }
       const tdPath = makeEl("td", "mono", truncateMiddle(f.path, 52));
       tdPath.title = f.path;
 
@@ -1229,7 +1238,7 @@
     }
   }
 
-  function showAppsActionBanner(title, message, cliCommand, isError) {
+  function showAppsActionBanner(title, message, cliCommand, tone) {
     const banner = document.getElementById("apps-action-banner");
     const titleEl = document.getElementById("apps-action-title");
     const msgEl = document.getElementById("apps-action-message");
@@ -1237,8 +1246,9 @@
     const cmdEl = document.getElementById("apps-action-cmd");
     const copyBtn = document.getElementById("apps-action-copy-btn");
     if (!banner) return;
-    banner.classList.remove("is-hidden", "is-error", "is-success");
-    banner.classList.add(isError ? "is-error" : "is-success");
+    const cls = tone === true || tone === "error" ? "is-error" : (tone === "warn" ? "is-warn" : "is-success");
+    banner.classList.remove("is-hidden", "is-error", "is-success", "is-warn");
+    banner.classList.add(cls);
     if (titleEl) titleEl.textContent = title || "Update status";
     if (msgEl) msgEl.textContent = message || "";
     if (cmdWrap && cmdEl) {
@@ -1252,49 +1262,66 @@
         cmdWrap.classList.add("is-hidden");
       }
     }
+    if (typeof banner.scrollIntoView === "function") {
+      banner.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
   }
 
-  function triggerUpdate(targetType, targetName, btnEl) {
+  function triggerUpdate(targetType, targetName, btnEl, installation) {
+    const key = targetType + "::" + (targetName || "*");
+    if (state.inflightUpdates[key]) return Promise.resolve();
+    state.inflightUpdates[key] = true;
     const origText = btnEl ? btnEl.textContent : "";
     if (btnEl) {
       btnEl.disabled = true;
       btnEl.textContent = "Updating...";
     }
+    const payload = { target_type: targetType, target_name: targetName || null };
+    if (installation) payload.installation = installation;
     return fetch("/api/actions/update", {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
-      body: JSON.stringify({ target_type: targetType, target_name: targetName || null })
+      body: JSON.stringify(payload)
     }).then(function (resp) {
-      return resp.json().then(function (body) { return { status: resp.status, body: body }; });
+      return resp.json().catch(function () { return {}; }).then(function (body) {
+        return { status: resp.status, body: body };
+      });
     }).then(function (res) {
       const b = res.body || {};
       if (res.status === 401) {
         showLogin();
         return;
       }
+      if (res.status === 409) {
+        showAppsActionBanner("Action in progress", b.message || "Another scan or update is already running.", "", "warn");
+        return;
+      }
       if (b.status === "needs_elevation") {
-        showAppsActionBanner("Administrator approval needed", b.message, b.cli_command || "", false);
-      } else if (b.ok) {
-        showAppsActionBanner("Update complete", b.message || "Updated successfully.", b.cli_command || "", false);
+        showAppsActionBanner("Administrator approval needed", b.message, b.cli_command || "", "warn");
+      } else if (res.status >= 200 && res.status < 300 && b.ok) {
+        showAppsActionBanner("Update complete", b.message || "Updated successfully.", b.cli_command || "", "success");
         loadApps(true);
         loadSnapshot();
       } else {
-        showAppsActionBanner("Update failed", b.message || "Update could not be completed.", b.cli_command || "", true);
+        showAppsActionBanner("Update failed", b.message || ("API returned status " + res.status + "."), b.cli_command || "", "error");
       }
     }).catch(function () {
-      showAppsActionBanner("Connection error", "Could not reach the Warden API to run the update.", "", true);
+      showAppsActionBanner("Connection error", "Could not reach the Warden API to run the update.", "", "error");
     }).finally(function () {
+      delete state.inflightUpdates[key];
       if (btnEl) {
         btnEl.disabled = false;
         btnEl.textContent = origText;
       }
+      if (state.activeView === "apps") renderApps();
     });
   }
 
   function loadApps(force) {
     if (state.appsLoading && !force) return Promise.resolve();
     state.appsLoading = true;
+    state.appsError = "";
     const checkBtn = document.getElementById("btn-check-updates");
     if (checkBtn) {
       checkBtn.disabled = true;
@@ -1309,13 +1336,30 @@
         showLogin();
         return null;
       }
-      return resp.ok ? resp.json() : null;
+      return resp.json().catch(function () { return null; }).then(function (body) {
+        if (!resp.ok || !body) {
+          state.appsError = (body && body.error) ? String(body.error) : ("Could not load installed plugins and apps (HTTP " + resp.status + ").");
+          renderApps();
+          return null;
+        }
+        return body;
+      });
     }).then(function (payload) {
       if (payload) {
         state.appsData = payload;
+        state.appsError = payload.error ? String(payload.error) : "";
+        const navAppsCount = document.getElementById("nav-apps-updates-count");
+        if (navAppsCount && payload.summary) {
+          const uCount = Number(payload.summary.updatable_count || 0);
+          navAppsCount.textContent = String(uCount);
+          navAppsCount.className = "nav-count" + (uCount === 0 ? " is-zero" : "");
+        }
         renderApps();
       }
-    }).catch(function () {}).finally(function () {
+    }).catch(function () {
+      state.appsError = "Network error while loading installed plugins and apps.";
+      renderApps();
+    }).finally(function () {
       state.appsLoading = false;
       if (checkBtn) {
         checkBtn.disabled = false;
@@ -1332,7 +1376,24 @@
     const mcpCount = document.getElementById("apps-mcp-count");
     const osTbody = document.getElementById("apps-os-tbody");
     const osCount = document.getElementById("apps-os-count");
+    const truncEl = document.getElementById("apps-os-truncation");
     if (!plugTbody || !osTbody) return;
+
+    if (state.appsError && !apps) {
+      clearChildren(plugTbody);
+      const tr = makeEl("tr");
+      const td = makeEl("td", "table-cell-error", state.appsError);
+      td.colSpan = 5;
+      tr.appendChild(td);
+      plugTbody.appendChild(tr);
+      clearChildren(osTbody);
+      const tr2 = makeEl("tr");
+      const td2 = makeEl("td", "table-cell-error", state.appsError);
+      td2.colSpan = 5;
+      tr2.appendChild(td2);
+      osTbody.appendChild(tr2);
+      return;
+    }
 
     if (!apps) {
       clearChildren(plugTbody);
@@ -1341,6 +1402,12 @@
       td.colSpan = 5;
       tr.appendChild(td);
       plugTbody.appendChild(tr);
+      clearChildren(osTbody);
+      const tr2 = makeEl("tr");
+      const td2 = makeEl("td", "text-muted", "Loading installed OS apps and packages...");
+      td2.colSpan = 5;
+      tr2.appendChild(td2);
+      osTbody.appendChild(tr2);
       return;
     }
 
@@ -1353,12 +1420,17 @@
     clearChildren(plugTbody);
     if (plugins.length === 0) {
       const tr = makeEl("tr");
-      const td = makeEl("td", "text-muted", "No Hermes plugins discovered in ~/.hermes/plugins or consented profiles.");
+      const emptyMsg = apps.discovery_approved === false
+        ? "Hermes plugin discovery requires approval in terminal setup (warden setup)."
+        : "No Hermes plugins discovered in consented Hermes root.";
+      const td = makeEl("td", "text-muted", emptyMsg);
       td.colSpan = 5;
       tr.appendChild(td);
       plugTbody.appendChild(tr);
     } else {
       plugins.forEach(function (p) {
+        const pluginId = p.id || p.name;
+        const inflightKey = "hermes_plugin::" + pluginId;
         const tr = makeEl("tr");
         const tdName = makeEl("td");
         tdName.appendChild(makeEl("div", "finding-row-title", p.name));
@@ -1369,15 +1441,21 @@
         tdSrc.title = p.source || "";
         tr.appendChild(tdSrc);
         const tdStat = makeEl("td");
-        tdStat.appendChild(makeEl("span", "status-pill is-running", p.enabled !== false ? "installed" : "disabled"));
+        const isEnabled = p.enabled !== false;
+        tdStat.appendChild(makeEl("span", "status-pill " + (isEnabled ? "is-running" : "is-stopped"), isEnabled ? "installed" : "disabled"));
         tr.appendChild(tdStat);
         const tdAct = makeEl("td");
-        const updBtn = makeEl("button", "quiet-btn update-row-btn", "Update");
-        updBtn.type = "button";
-        updBtn.addEventListener("click", function () {
-          triggerUpdate("hermes_plugin", p.name, updBtn);
-        });
-        tdAct.appendChild(updBtn);
+        if (p.updatable !== false) {
+          const updBtn = makeEl("button", "quiet-btn update-row-btn", state.inflightUpdates[inflightKey] ? "Updating..." : "Update");
+          updBtn.type = "button";
+          updBtn.disabled = Boolean(state.inflightUpdates[inflightKey]);
+          updBtn.addEventListener("click", function () {
+            triggerUpdate("hermes_plugin", pluginId, updBtn);
+          });
+          tdAct.appendChild(updBtn);
+        } else {
+          tdAct.appendChild(makeEl("span", "text-muted", "Local"));
+        }
         tr.appendChild(tdAct);
         plugTbody.appendChild(tr);
       });
@@ -1406,9 +1484,9 @@
       if (state.appsFilter === "security" && a.security !== true) return false;
       if (state.appsFilter === "flatpak" && a.manager !== "flatpak") return false;
       if (state.appsFilter === "snap" && a.manager !== "snap") return false;
-      if (state.appsFilter === "apt" && a.manager !== "apt" && a.manager !== "brew" && a.manager !== "softwareupdate" && a.manager !== "windowsupdate") return false;
+      if (state.appsFilter === "apt" && a.manager !== "apt" && a.manager !== "brew" && a.manager !== "macos_app" && a.manager !== "softwareupdate" && a.manager !== "windowsupdate") return false;
       if (query) {
-        const hay = ((a.name || "") + " " + (a.manager || "") + " " + (a.section || "") + " " + (a.installed_version || "")).toLowerCase();
+        const hay = ((a.name || "") + " " + (a.package_id || "") + " " + (a.manager || "") + " " + (a.section || "") + " " + (a.installed_version || "")).toLowerCase();
         if (hay.indexOf(query) === -1) return false;
       }
       return true;
@@ -1422,8 +1500,10 @@
       td.colSpan = 5;
       tr.appendChild(td);
       osTbody.appendChild(tr);
+      if (truncEl) truncEl.classList.add("is-hidden");
     } else {
-      filteredOs.slice(0, 200).forEach(function (a) {
+      const shown = filteredOs.slice(0, 200);
+      shown.forEach(function (a) {
         const tr = makeEl("tr");
         const tdName = makeEl("td");
         tdName.appendChild(makeEl("span", "mono", a.name));
@@ -1441,10 +1521,12 @@
         if (a.update_available || a.manager === "flatpak" || a.manager === "brew") {
           const targetType = a.manager === "flatpak" ? "flatpak" : (a.manager === "brew" ? "brew" : "os_package");
           const targetName = a.package_id || a.name;
-          const btn = makeEl("button", "quiet-btn update-row-btn", "Update");
+          const inflightKey = targetType + "::" + targetName;
+          const btn = makeEl("button", "quiet-btn update-row-btn", state.inflightUpdates[inflightKey] ? "Updating..." : "Update");
           btn.type = "button";
+          btn.disabled = Boolean(state.inflightUpdates[inflightKey]);
           btn.addEventListener("click", function () {
-            triggerUpdate(targetType, targetName, btn);
+            triggerUpdate(targetType, targetName, btn, a.installation || null);
           });
           tdAct.appendChild(btn);
         } else {
@@ -1453,11 +1535,20 @@
         tr.appendChild(tdAct);
         osTbody.appendChild(tr);
       });
+      if (truncEl) {
+        const total = Math.max(filteredOs.length, Number(summary.os_apps_count || 0));
+        if (filteredOs.length > 200 || (state.appsFilter === "all" && !query && total > shown.length)) {
+          truncEl.textContent = "Showing " + shown.length + " of " + total + " matching items. Use search or filters to narrow results.";
+          truncEl.classList.remove("is-hidden");
+        } else {
+          truncEl.classList.add("is-hidden");
+        }
+      }
     }
   }
 
   function triggerScan() {
-    if (state.isScanning) return;
+    if (state.isScanning || (state.currentData && !state.currentData.configured)) return;
     state.isScanning = true;
     const scanBtn = document.getElementById("btn-run-scan");
     if (scanBtn) {
@@ -1474,7 +1565,7 @@
         showLogin();
         return null;
       }
-      return resp.json();
+      return resp.json().catch(function () { return { ok: false, message: "Scan returned HTTP " + resp.status }; });
     }).then(function (res) {
       if (res && res.ok) {
         loadSnapshot();
@@ -1486,15 +1577,16 @@
     }).finally(function () {
       state.isScanning = false;
       if (scanBtn) {
-        scanBtn.disabled = false;
+        scanBtn.disabled = Boolean(state.currentData && !state.currentData.configured);
         scanBtn.textContent = "Scan now";
       }
     });
   }
 
-  function toggleProtectionSetting(key, value) {
+  function toggleProtectionSetting(key, value, checkboxEl) {
     const statusEl = document.getElementById("protection-settings-status");
     if (statusEl) statusEl.textContent = "Saving...";
+    if (checkboxEl) checkboxEl.disabled = true;
     const body = {};
     body[key] = Boolean(value);
     fetch("/api/actions/settings", {
@@ -1507,16 +1599,20 @@
         showLogin();
         return null;
       }
-      return resp.json();
+      return resp.json().catch(function () { return { ok: false }; });
     }).then(function (res) {
       if (res && res.ok) {
-        if (statusEl) statusEl.textContent = "Saved";
+        if (statusEl) statusEl.textContent = "Saved · Rescan to apply";
         loadSnapshot();
-      } else if (statusEl) {
-        statusEl.textContent = "Error";
+      } else {
+        if (checkboxEl) checkboxEl.checked = !value;
+        if (statusEl) statusEl.textContent = "Error";
       }
     }).catch(function () {
+      if (checkboxEl) checkboxEl.checked = !value;
       if (statusEl) statusEl.textContent = "Error";
+    }).finally(function () {
+      if (checkboxEl) checkboxEl.disabled = false;
     });
   }
 
@@ -1635,6 +1731,11 @@
       sevEl.title = finding.assessment_state === "previous_rule"
         ? "Recorded " + finding.severity.toUpperCase() + " under the previous rule; rescan required."
         : (finding.assessment_state === "mode_only" ? "Mode-bit triage only; effective access has not been verified." : "Recorded severity");
+    }
+
+    const catEl = document.getElementById("drawer-category");
+    if (catEl) {
+      catEl.textContent = finding.category || "security";
     }
 
     const statEl = document.getElementById("drawer-status");
@@ -1777,6 +1878,10 @@
 
     const loadingEl = document.getElementById("state-loading");
     const emptyEl = document.getElementById("state-empty");
+    const scanBtn = document.getElementById("btn-run-scan");
+    if (scanBtn && !state.isScanning) {
+      scanBtn.disabled = !data.configured;
+    }
 
     if (loadingEl) loadingEl.classList.add("is-hidden");
 
@@ -2082,6 +2187,7 @@
     const updAllPlugBtn = document.getElementById("btn-update-all-plugins");
     if (updAllPlugBtn) {
       updAllPlugBtn.addEventListener("click", function () {
+        if (typeof window !== "undefined" && typeof window.confirm === "function" && !window.confirm("Update all installed Hermes plugins?")) return;
         triggerUpdate("hermes_plugins_all", null, updAllPlugBtn);
       });
     }
@@ -2089,6 +2195,7 @@
     const updOsAllBtn = document.getElementById("btn-update-os-all");
     if (updOsAllBtn) {
       updOsAllBtn.addEventListener("click", function () {
+        if (typeof window !== "undefined" && typeof window.confirm === "function" && !window.confirm("Run OS package updates (or show the terminal update command)?")) return;
         triggerUpdate("os_all", null, updOsAllBtn);
       });
     }
@@ -2119,25 +2226,29 @@
     const tSec = document.getElementById("toggle-security-scan");
     if (tSec) {
       tSec.addEventListener("change", function () {
-        toggleProtectionSetting("security_scan", tSec.checked);
+        toggleProtectionSetting("security_scan", tSec.checked, tSec);
       });
     }
     const tAv = document.getElementById("toggle-system-av");
     if (tAv) {
       tAv.addEventListener("change", function () {
-        toggleProtectionSetting("use_system_av", tAv.checked);
+        toggleProtectionSetting("use_system_av", tAv.checked, tAv);
       });
     }
     const tPerm = document.getElementById("toggle-check-permissions");
     if (tPerm) {
       tPerm.addEventListener("change", function () {
-        toggleProtectionSetting("check_permissions", tPerm.checked);
+        toggleProtectionSetting("check_permissions", tPerm.checked, tPerm);
       });
     }
 
     document.addEventListener("keydown", function (e) {
+      const loginOverlay = document.getElementById("login-screen");
+      if (loginOverlay && !loginOverlay.classList.contains("is-hidden")) {
+        return;
+      }
       const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : "";
-      const inInput = tag === "input" || tag === "select" || tag === "textarea";
+      const inInput = tag === "input" || tag === "select" || tag === "textarea" || Boolean(e.target && e.target.isContentEditable);
 
       if (e.key === "Escape") {
         if (state.selectedFindingId) {
@@ -2192,6 +2303,8 @@
     root.CustodianUI.renderOverview = renderOverview;
     root.CustodianUI.renderFindings = renderFindings;
     root.CustodianUI.renderChanges = renderChanges;
+    root.CustodianUI.renderApps = renderApps;
+    root.CustodianUI.showAppsActionBanner = showAppsActionBanner;
     root.CustodianUI.renderProfiles = renderProfiles;
     root.CustodianUI.renderCoverage = renderCoverage;
     root.CustodianUI.renderHealth = renderHealth;

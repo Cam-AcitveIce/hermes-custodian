@@ -38,8 +38,9 @@ CSP_HEADER_VALUE = (
     "form-action 'self'"
 )
 POLICY_DISCLOSURE_TEXT = (
-    "Content SHA-256 hashes are computed only for .py and .md files within max_file_bytes; "
-    "all other file types are inspected metadata-only (mode, uid, size, mtime_ns), and "
+    "Content SHA-256 baselines are computed for .py and .md files within max_file_bytes, "
+    "and built-in security/AV heuristics inspect non-sensitive text/script files within scan budgets; "
+    "other binary files are metadata-only (mode, uid, size, mtime_ns), and "
     "sensitive directories/credentials are never enumerated or read."
 )
 
@@ -528,32 +529,39 @@ def _safe_updates(engine: Any) -> dict[str, Any]:
     }
 
 
-def _safe_av_status(engine: Any) -> dict[str, Any]:
+def _safe_av_status(engine: Any, settings: dict[str, Any] | None = None) -> dict[str, Any]:
     if hasattr(engine, "av_status"):
         try:
             res = engine.av_status()
             if isinstance(res, dict):
-                return _scrub_value(res)
+                cleaned = _scrub_value(res)
+                cleaned.pop("binary", None)
+                return cleaned
         except Exception:
             pass
+    sec_enabled = bool(settings.get("security_scan", True)) if isinstance(settings, dict) else True
+    use_av = bool(settings.get("use_system_av", True)) if isinstance(settings, dict) else True
+    chk_perm = bool(settings.get("check_permissions", False)) if isinstance(settings, dict) else False
     try:
         from . import scanner
         info = scanner.detect_system_av()
-        return _scrub_value({
+        cleaned = _scrub_value({
             **info,
-            "security_scan_enabled": True,
-            "use_system_av": True,
-            "check_permissions": False,
+            "security_scan_enabled": sec_enabled,
+            "use_system_av": use_av,
+            "check_permissions": chk_perm,
         })
+        cleaned.pop("binary", None)
+        return cleaned
     except Exception:
         return {
             "available": False,
             "engine": None,
             "label": "Built-in scanner only",
             "builtin_heuristics": True,
-            "security_scan_enabled": True,
-            "use_system_av": True,
-            "check_permissions": False,
+            "security_scan_enabled": sec_enabled,
+            "use_system_av": use_av,
+            "check_permissions": chk_perm,
         }
 
 
@@ -562,7 +570,7 @@ def _safe_apps(
     settings: dict[str, Any] | None,
     inventory_data: dict[str, Any] | None,
     updates_data: dict[str, Any] | None,
-) -> dict[str, Any]:
+) -> tuple[bool, dict[str, Any]]:
     try:
         if hasattr(engine, "apps"):
             res = engine.apps(inventory_data=inventory_data, updates_data=updates_data)
@@ -572,9 +580,10 @@ def _safe_apps(
                 settings, inventory_data=inventory_data, updates_data=updates_data
             )
         if isinstance(res, dict):
-            return _scrub_value(res)
-    except Exception as exc:
-        return {
+            return True, _scrub_value(res)
+    except Exception:
+        return False, {
+            "discovery_approved": False,
             "hermes_plugins": [],
             "mcp_servers": [],
             "os_apps": [],
@@ -587,9 +596,10 @@ def _safe_apps(
                 "updatable_count": 0,
                 "security_updates_count": 0,
             },
-            "error": _sanitise_text(str(exc)),
+            "error": "Installed plugins and apps could not be queried.",
         }
-    return {
+    return True, {
+        "discovery_approved": False,
         "hermes_plugins": [],
         "mcp_servers": [],
         "os_apps": [],
@@ -667,6 +677,7 @@ class CustodianDashboardServer(ThreadingHTTPServer):
         self.rate_limit_window_seconds = max(1, int(rate_limit_window_seconds))
         self.clock = clock or time.time
         self._lock = threading.Lock()
+        self._action_lock = threading.Lock()
         self._failed_logins: list[float] = []
         # Ensure persisted signing key + epoch exist on startup
         self._load_or_create_key_and_epoch()
@@ -1026,7 +1037,7 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
         scope_preview = _compute_scope_preview(settings, status, configured)
         inventory_data = _collect_consented_inventory(engine, settings, configured)
         updates_data = _safe_updates(engine)
-        av_status = _safe_av_status(engine)
+        av_status = _safe_av_status(engine, settings if configured else None)
 
         return {
             "read_only": True,
@@ -1138,7 +1149,8 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.OK, _safe_updates(engine))
                 return
             if route == "/api/av":
-                self._send_json(HTTPStatus.OK, _safe_av_status(engine))
+                has_settings, settings = _safe_settings(engine)
+                self._send_json(HTTPStatus.OK, _safe_av_status(engine, settings if has_settings else None))
                 return
             if route == "/api/apps":
                 has_settings, settings = _safe_settings(engine)
@@ -1146,7 +1158,8 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
                 configured = bool(status.get("configured", False) and has_settings)
                 inventory_data = _collect_consented_inventory(engine, settings, configured)
                 updates_data = _safe_updates(engine)
-                self._send_json(HTTPStatus.OK, _safe_apps(engine, settings, inventory_data, updates_data))
+                apps_ok, apps_payload = _safe_apps(engine, settings if configured else None, inventory_data, updates_data)
+                self._send_json(HTTPStatus.OK if apps_ok else HTTPStatus.SERVICE_UNAVAILABLE, apps_payload)
                 return
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
             return
@@ -1216,6 +1229,15 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
         if not ok or body_obj is None:
             return
         engine = self.server.engine
+        has_settings, settings = _safe_settings(engine)
+        status = _safe_status(engine)
+        configured = bool(status.get("configured", False) and has_settings)
+        if not configured:
+            self._send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"ok": False, "error": "not_configured", "message": "Warden is not configured yet. Run 'warden setup' first."},
+            )
+            return
 
         if route == "/api/actions/scan":
             if not hasattr(engine, "scan"):
@@ -1224,14 +1246,27 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
                     {"ok": False, "error": "scan_unavailable", "message": "Scan is not available on this engine."},
                 )
                 return
+            if not self.server._action_lock.acquire(blocking=False):
+                self._send_json(
+                    HTTPStatus.CONFLICT,
+                    {"ok": False, "error": "busy", "message": "Another scan or update action is already in progress."},
+                )
+                return
             try:
                 result = engine.scan()
                 self._send_json(HTTPStatus.OK, {"ok": True, "scan": _scrub_value(result)})
-            except Exception as exc:
+            except TimeoutError:
+                self._send_json(
+                    HTTPStatus.CONFLICT,
+                    {"ok": False, "error": "busy", "message": "Scan lock is currently held by another process."},
+                )
+            except Exception:
                 self._send_json(
                     HTTPStatus.INTERNAL_SERVER_ERROR,
-                    {"ok": False, "error": "scan_failed", "message": _sanitise_text(str(exc))},
+                    {"ok": False, "error": "scan_failed", "message": "Scan failed; inspect local diagnostics."},
                 )
+            finally:
+                self.server._action_lock.release()
             return
 
         if route == "/api/actions/settings":
@@ -1244,16 +1279,27 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
             try:
                 updated = engine.update_protection_settings(body_obj)
                 self._send_json(HTTPStatus.OK, {"ok": True, "settings": _scrub_value(updated)})
-            except (ValueError, OSError) as exc:
+            except TimeoutError:
+                self._send_json(
+                    HTTPStatus.CONFLICT,
+                    {"ok": False, "error": "busy", "message": "Settings lock is busy; try again shortly."},
+                )
+            except ValueError as exc:
                 self._send_json(
                     HTTPStatus.BAD_REQUEST,
                     {"ok": False, "error": "invalid_settings", "message": _sanitise_text(str(exc))},
+                )
+            except (OSError, RuntimeError):
+                self._send_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {"ok": False, "error": "settings_failed", "message": "Could not update protection settings."},
                 )
             return
 
         if route == "/api/actions/update":
             target_type = body_obj.get("target_type")
             target_name = body_obj.get("target_name")
+            installation = body_obj.get("installation")
             if not isinstance(target_type, str) or not target_type:
                 self._send_json(
                     HTTPStatus.BAD_REQUEST,
@@ -1266,25 +1312,43 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
                     {"ok": False, "error": "invalid_target", "message": "target_name must be a string or null."},
                 )
                 return
-            from . import apps as apps_mod
-            has_settings, settings = _safe_settings(engine)
-            status = _safe_status(engine)
-            configured = bool(status.get("configured", False) and has_settings)
-            inventory_data = _collect_consented_inventory(engine, settings, configured)
-            res = apps_mod.run_update(
-                target_type,
-                target_name,
-                settings=settings,
-                inventory_data=inventory_data,
-            )
-            payload = {
+            if installation is not None and installation not in ("user", "system"):
+                self._send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"ok": False, "error": "invalid_target", "message": "installation must be 'user' or 'system'."},
+                )
+                return
+            if not self.server._action_lock.acquire(blocking=False):
+                self._send_json(
+                    HTTPStatus.CONFLICT,
+                    {"ok": False, "error": "busy", "message": "Another scan or update action is already in progress."},
+                )
+                return
+            try:
+                from . import apps as apps_mod
+                inventory_data = _collect_consented_inventory(engine, settings, configured)
+                res = apps_mod.run_update(
+                    target_type,
+                    target_name,
+                    settings=settings,
+                    inventory_data=inventory_data,
+                    installation=installation,
+                )
+            finally:
+                self.server._action_lock.release()
+            res_status = _sanitise_text(str(res.get("status", "unknown")))
+            payload: dict[str, Any] = {
                 "ok": bool(res.get("ok")),
-                "status": _sanitise_text(str(res.get("status", "unknown"))),
+                "status": res_status,
                 "message": _sanitise_text(str(res.get("message", ""))),
             }
             if res.get("command"):
                 payload["cli_command"] = _sanitise_text(str(res["command"]))
-            self._send_json(HTTPStatus.OK, payload)
+            http_code = (
+                HTTPStatus.BAD_REQUEST if res_status == "invalid"
+                else (HTTPStatus.FORBIDDEN if res_status == "denied" else HTTPStatus.OK)
+            )
+            self._send_json(http_code, payload)
             return
 
     def do_POST(self) -> None:
@@ -1308,7 +1372,8 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
             return
         if route == "/api/logout":
             sid = self._extract_session_cookie()
-            self.server.revoke_session(sid)
+            if self.server.validate_session(sid):
+                self.server.revoke_session(sid)
             clear_cookie = (
                 f"{SESSION_COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"
             )
