@@ -61,7 +61,7 @@ def configure_parser(parser, *, state_dir=None):
     parser.add_argument('--state-dir', type=Path, default=default_state_dir() if state_dir is None else state_dir)
     subs = parser.add_subparsers(dest='custodian_command', required=True)
     subs.add_parser('dashboard-credentials', help='Set or reset local dashboard username/password using masked terminal prompts')
-    for name, help_text in [('setup', 'Guided CLI setup: discover profiles and choose watched folders'), ('tui', 'Open the terminal control centre'), ('scan', 'Run a bounded scan of approved paths'), ('status', 'Show monitoring health and coverage'), ('findings', 'Show evidence-backed findings'), ('events', 'Show recent changes'), ('monitor', 'Run the foreground monitoring workload'), ('dashboard', 'Launch an authenticated loopback dashboard'), ('updates', 'Check native OS updates without applying them')]:
+    for name, help_text in [('setup', 'Guided CLI setup: discover profiles and choose watched folders'), ('tui', 'Open the terminal control centre'), ('scan', 'Run a bounded security & AV scan of approved paths'), ('status', 'Show monitoring health and coverage'), ('findings', 'Show evidence-backed findings'), ('events', 'Show recent changes'), ('apps', 'List installed Hermes plugins, MCP servers, and OS apps/packages'), ('av-status', 'Show antivirus and security scanner status'), ('monitor', 'Run the foreground monitoring workload'), ('dashboard', 'Launch an authenticated loopback dashboard'), ('updates', 'Check native OS updates without applying them')]:
         cmd = subs.add_parser(name, help=help_text)
         if name == 'monitor':
             cmd.add_argument('--once', action='store_true', help='Run one monitoring cycle and exit')
@@ -155,7 +155,10 @@ def run_command(args, parser):
                 from .monitor import run_monitor
                 run_monitor(engine, args.state_dir, once=args.once)
                 return 0
-            result = getattr(engine, args.custodian_command)()
+            if args.custodian_command == 'av-status':
+                result = engine.av_status()
+            else:
+                result = getattr(engine, args.custodian_command)()
         print(json.dumps(result, indent=2, ensure_ascii=True))
         if isinstance(result, dict) and (result.get('ok') is False or result.get('status') not in (None, 'ok', 'ready', 'applied')):
             return 1

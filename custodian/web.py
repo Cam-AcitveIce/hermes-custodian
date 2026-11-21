@@ -528,6 +528,83 @@ def _safe_updates(engine: Any) -> dict[str, Any]:
     }
 
 
+def _safe_av_status(engine: Any) -> dict[str, Any]:
+    if hasattr(engine, "av_status"):
+        try:
+            res = engine.av_status()
+            if isinstance(res, dict):
+                return _scrub_value(res)
+        except Exception:
+            pass
+    try:
+        from . import scanner
+        info = scanner.detect_system_av()
+        return _scrub_value({
+            **info,
+            "security_scan_enabled": True,
+            "use_system_av": True,
+            "check_permissions": False,
+        })
+    except Exception:
+        return {
+            "available": False,
+            "engine": None,
+            "label": "Built-in scanner only",
+            "builtin_heuristics": True,
+            "security_scan_enabled": True,
+            "use_system_av": True,
+            "check_permissions": False,
+        }
+
+
+def _safe_apps(
+    engine: Any,
+    settings: dict[str, Any] | None,
+    inventory_data: dict[str, Any] | None,
+    updates_data: dict[str, Any] | None,
+) -> dict[str, Any]:
+    try:
+        if hasattr(engine, "apps"):
+            res = engine.apps(inventory_data=inventory_data, updates_data=updates_data)
+        else:
+            from . import apps as apps_mod
+            res = apps_mod.discover_installed_apps(
+                settings, inventory_data=inventory_data, updates_data=updates_data
+            )
+        if isinstance(res, dict):
+            return _scrub_value(res)
+    except Exception as exc:
+        return {
+            "hermes_plugins": [],
+            "mcp_servers": [],
+            "os_apps": [],
+            "managers": [],
+            "summary": {
+                "plugins_count": 0,
+                "mcp_count": 0,
+                "os_apps_count": 0,
+                "os_apps_shown": 0,
+                "updatable_count": 0,
+                "security_updates_count": 0,
+            },
+            "error": _sanitise_text(str(exc)),
+        }
+    return {
+        "hermes_plugins": [],
+        "mcp_servers": [],
+        "os_apps": [],
+        "managers": [],
+        "summary": {
+            "plugins_count": 0,
+            "mcp_count": 0,
+            "os_apps_count": 0,
+            "os_apps_shown": 0,
+            "updatable_count": 0,
+            "security_updates_count": 0,
+        },
+    }
+
+
 DEFAULT_IDLE_SESSION_SECONDS = 12 * 3600
 DEFAULT_ABSOLUTE_SESSION_SECONDS = 14 * 86400
 
@@ -949,6 +1026,7 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
         scope_preview = _compute_scope_preview(settings, status, configured)
         inventory_data = _collect_consented_inventory(engine, settings, configured)
         updates_data = _safe_updates(engine)
+        av_status = _safe_av_status(engine)
 
         return {
             "read_only": True,
@@ -961,6 +1039,7 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
             "data_errors": data_errors,
             "inventory": inventory_data,
             "updates": updates_data,
+            "av_status": av_status,
         }
 
     def do_GET(self) -> None:
@@ -1058,6 +1137,17 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
             if route == "/api/updates":
                 self._send_json(HTTPStatus.OK, _safe_updates(engine))
                 return
+            if route == "/api/av":
+                self._send_json(HTTPStatus.OK, _safe_av_status(engine))
+                return
+            if route == "/api/apps":
+                has_settings, settings = _safe_settings(engine)
+                status = _safe_status(engine)
+                configured = bool(status.get("configured", False) and has_settings)
+                inventory_data = _collect_consented_inventory(engine, settings, configured)
+                updates_data = _safe_updates(engine)
+                self._send_json(HTTPStatus.OK, _safe_apps(engine, settings, inventory_data, updates_data))
+                return
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
             return
         if route in _STATIC_ASSETS:
@@ -1078,9 +1168,131 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
             return
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
 
+    def _read_json_body(self, max_length: int = 4096) -> tuple[bool, dict[str, Any] | None]:
+        content_type = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            self._send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"error": "invalid_content_type", "message": "Expected application/json."},
+            )
+            return False, None
+        try:
+            length = int(self.headers.get("Content-Length") or "0")
+        except ValueError:
+            length = 0
+        if length <= 0 or length > max_length:
+            self._send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"error": "invalid_body", "message": "Invalid request payload size."},
+            )
+            return False, None
+        raw_body = self.rfile.read(length)
+        try:
+            body_obj = json.loads(raw_body.decode("utf-8"))
+        except Exception:
+            self._send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"error": "invalid_json", "message": "Malformed JSON body."},
+            )
+            return False, None
+        if not isinstance(body_obj, dict):
+            self._send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"error": "invalid_json", "message": "JSON object required."},
+            )
+            return False, None
+        return True, body_obj
+
+    def _handle_action_post(self, route: str) -> None:
+        if not self._require_exact_origin():
+            return
+        if not self._is_authenticated():
+            self._send_json(
+                HTTPStatus.UNAUTHORIZED,
+                {"error": "unauthorized", "message": "Valid session required."},
+            )
+            return
+        ok, body_obj = self._read_json_body()
+        if not ok or body_obj is None:
+            return
+        engine = self.server.engine
+
+        if route == "/api/actions/scan":
+            if not hasattr(engine, "scan"):
+                self._send_json(
+                    HTTPStatus.NOT_IMPLEMENTED,
+                    {"ok": False, "error": "scan_unavailable", "message": "Scan is not available on this engine."},
+                )
+                return
+            try:
+                result = engine.scan()
+                self._send_json(HTTPStatus.OK, {"ok": True, "scan": _scrub_value(result)})
+            except Exception as exc:
+                self._send_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {"ok": False, "error": "scan_failed", "message": _sanitise_text(str(exc))},
+                )
+            return
+
+        if route == "/api/actions/settings":
+            if not hasattr(engine, "update_protection_settings"):
+                self._send_json(
+                    HTTPStatus.NOT_IMPLEMENTED,
+                    {"ok": False, "error": "settings_unavailable", "message": "Protection settings toggle unavailable."},
+                )
+                return
+            try:
+                updated = engine.update_protection_settings(body_obj)
+                self._send_json(HTTPStatus.OK, {"ok": True, "settings": _scrub_value(updated)})
+            except (ValueError, OSError) as exc:
+                self._send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"ok": False, "error": "invalid_settings", "message": _sanitise_text(str(exc))},
+                )
+            return
+
+        if route == "/api/actions/update":
+            target_type = body_obj.get("target_type")
+            target_name = body_obj.get("target_name")
+            if not isinstance(target_type, str) or not target_type:
+                self._send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"ok": False, "error": "invalid_target", "message": "target_type is required."},
+                )
+                return
+            if target_name is not None and not isinstance(target_name, str):
+                self._send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"ok": False, "error": "invalid_target", "message": "target_name must be a string or null."},
+                )
+                return
+            from . import apps as apps_mod
+            has_settings, settings = _safe_settings(engine)
+            status = _safe_status(engine)
+            configured = bool(status.get("configured", False) and has_settings)
+            inventory_data = _collect_consented_inventory(engine, settings, configured)
+            res = apps_mod.run_update(
+                target_type,
+                target_name,
+                settings=settings,
+                inventory_data=inventory_data,
+            )
+            payload = {
+                "ok": bool(res.get("ok")),
+                "status": _sanitise_text(str(res.get("status", "unknown"))),
+                "message": _sanitise_text(str(res.get("message", ""))),
+            }
+            if res.get("command"):
+                payload["cli_command"] = _sanitise_text(str(res["command"]))
+            self._send_json(HTTPStatus.OK, payload)
+            return
+
     def do_POST(self) -> None:
         ok, route, _ = self._validate_host_and_query()
         if not ok:
+            return
+        if route in ("/api/actions/scan", "/api/actions/update", "/api/actions/settings"):
+            self._handle_action_post(route)
             return
         if route not in ("/api/session", "/api/logout"):
             self._send_json(

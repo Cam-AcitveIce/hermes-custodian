@@ -39,7 +39,7 @@ class EngineTests(unittest.TestCase):
         policy = types.SimpleNamespace(
             bounded_snapshot=lambda *args, **kwargs: {'files': [dict(item)], 'errors': [], 'complete': True},
             is_finding_sensitive=lambda path, entry_type: path.name == '.env', sanitise_text=lambda value: str(value))
-        self.engine.setup({'watched_paths': [str(self.scope)]})
+        self.engine.setup({'watched_paths': [str(self.scope)], 'check_permissions': True, 'security_scan': False})
         with patch.dict('sys.modules', {'custodian.policy': policy}):
             first = self.engine.scan()
             self.assertTrue(first['complete'])
@@ -63,7 +63,7 @@ class EngineTests(unittest.TestCase):
         def broken(*args, **kwargs):
             raise OSError('synthetic denied')
         policy = types.SimpleNamespace(bounded_snapshot=broken, sanitise_text=str)
-        self.engine.setup({'watched_paths': [str(self.scope)]})
+        self.engine.setup({'watched_paths': [str(self.scope)], 'check_permissions': True, 'security_scan': False})
         with patch.dict('sys.modules', {'custodian.policy': policy}):
             result = self.engine.scan()
         self.assertFalse(result['complete'])
@@ -81,7 +81,7 @@ class EngineTests(unittest.TestCase):
         import types
         policy = types.SimpleNamespace(bounded_snapshot=lambda *args, **kwargs:
             {'files': [], 'errors': [], 'complete': True}, sanitise_text=str)
-        self.engine.setup({'watched_paths': [str(self.scope)]})
+        self.engine.setup({'watched_paths': [str(self.scope)], 'check_permissions': True, 'security_scan': False})
         with patch.dict('sys.modules', {'custodian.policy': policy}):
             self.engine.scan()
         other = self.root / 'other'
@@ -113,7 +113,7 @@ class EngineTests(unittest.TestCase):
             if str(path) in {'.env', 'memories', 'private.md'}:
                 self.fail('Attempted to open sensitive fixture: ' + str(path))
             return real_open(path, *args, **kwargs)
-        self.engine.setup({'watched_paths': [str(self.scope)]})
+        self.engine.setup({'watched_paths': [str(self.scope)], 'check_permissions': True, 'security_scan': False})
         with patch('os.open', side_effect=guarded):
             first = self.engine.scan()
             self.assertTrue(first['complete'], first['errors'])
@@ -135,7 +135,7 @@ class EngineTests(unittest.TestCase):
         snapshot = {'files': [item], 'errors': [], 'complete': True}
         policy = types.SimpleNamespace(bounded_snapshot=lambda *args, **kwargs: snapshot,
                                        is_finding_sensitive=lambda path, entry_type: path.name == '.env', sanitise_text=str)
-        self.engine.setup({'watched_paths': [str(self.scope)]})
+        self.engine.setup({'watched_paths': [str(self.scope)], 'check_permissions': True, 'security_scan': False})
         with patch.dict('sys.modules', {'custodian.policy': policy}):
             self.engine.scan()
             snapshot.update(files=[], errors=['synthetic budget exhausted'], complete=False)
@@ -193,7 +193,7 @@ class EngineTests(unittest.TestCase):
 
     def test_monitor_heartbeat_requires_fresh_owned_live_pid_and_reports_errors(self):
         import time
-        self.engine.setup({'watched_paths': [str(self.scope)]})
+        self.engine.setup({'watched_paths': [str(self.scope)], 'check_permissions': True, 'security_scan': False})
         path = self.engine.store.root / 'monitor.json'
         health = {'pid': os.getpid(), 'running': True, 'started_at': time.time(),
                   'last_result': None, 'error': None, 'heartbeat_at': time.time()}

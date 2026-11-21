@@ -59,6 +59,15 @@ _SPECS = {
     'launchctl': ('posix', None, ()),
     'softwareupdate': ('posix', None, ()),
     'ps': ('posix', None, ()),
+    # Local security & antivirus scanners (ClamAV, YARA)
+    'av': ('posix', POSIX_SYSTEM_PATH + ':/usr/local/bin:/opt/homebrew/bin', ()),
+    'yara': ('posix', POSIX_SYSTEM_PATH + ':/usr/local/bin:/opt/homebrew/bin', ()),
+    # Plugin and OS app discovery / user-triggered updates
+    'git': ('posix', POSIX_SYSTEM_PATH + ':/usr/local/bin:/opt/homebrew/bin', ('HOME',)),
+    'hermes': ('posix', POSIX_SYSTEM_PATH + ':/usr/local/bin:/opt/homebrew/bin', ('HOME', 'HERMES_HOME')),
+    'flatpak': ('posix', POSIX_SYSTEM_PATH + ':/usr/local/bin', ('HOME', 'XDG_DATA_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS')),
+    'snap': ('posix', POSIX_SYSTEM_PATH + ':/snap/bin', ()),
+    'brew': ('posix', POSIX_SYSTEM_PATH + ':/usr/local/bin:/opt/homebrew/bin', ('HOME',)),
     'schtasks': ('windows', None, _WINDOWS_SYSTEM_NAMES),
     'powershell': ('windows', None, _WINDOWS_SYSTEM_NAMES + _WINDOWS_PROFILE_NAMES),
 }

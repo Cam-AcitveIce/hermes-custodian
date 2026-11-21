@@ -39,12 +39,15 @@ class Engine:
     def setup(self, settings: dict) -> dict:
         result: dict = dict(schema_version=1, profiles=[], watched_paths=[], exclusions=list(RECOMMENDED_EXCLUSIONS),
                       hermes_root=None, interval_seconds=60, max_files=10000, max_file_bytes=1048576,
-                      retention_days=30)
+                      retention_days=30, check_permissions=False, security_scan=True, use_system_av=True)
         if not isinstance(settings, dict) or set(settings) - set(result):
             raise ValueError('Unknown settings fields')
         result.update(settings)
         if result['schema_version'] != 1:
             raise ValueError('Unsupported schema_version')
+        for key in ('check_permissions', 'security_scan', 'use_system_av'):
+            if type(result[key]) is not bool:
+                raise ValueError(f'{key} must be a boolean')
         for key, low, high in [('interval_seconds', 10, 86400), ('max_files', 1, 100000),
                                ('max_file_bytes', 1, 16777216), ('retention_days', 1, 365)]:
             value = result[key]
@@ -145,44 +148,61 @@ class Engine:
             for item in snapshot['files']:
                 files[item['path']] = item
         findings = []
-        for raw_path, item in sorted(files.items()):
-            if not policy.is_finding_sensitive(Path(raw_path), item.get('type', 'file')):
-                continue
-            path = policy.sanitise_text(raw_path)
-            if item.get('type') == 'symlink':
-                findings.append({'id': hashlib.sha256(('sensitive_symlink:' + raw_path).encode()).hexdigest(),
-                                 'severity': 'low',
-                                 'title': 'sensitive path is a symlink, target not followed',
-                                 'path': path, 'evidence': {'type': 'symlink'},
-                                 'recommendation': 'Inspect the symlink target manually; link mode does not control target permissions.',
-                                 'first_seen': started, 'last_seen': started, 'status': 'open',
-                                 'scope_signature': signature})
-            else:
-                exposure = _platform.access_exposure(item)
-                if exposure:
-                    title = 'sensitive-path file is accessible beyond its owner' if _platform.NAME == 'windows' else 'sensitive-path file has group/other permission bits set'
-                    evidence: dict = {'mode': oct(exposure['mode'])}
-                    recommendation = 'Review ownership and restrict permissions manually.'
-                    if _platform.NAME != 'windows':
-                        evidence.update(
-                            severity_basis=exposure.get('severity_basis', 'unspecified_mode_evidence'),
-                            access_verified=False,
-                            assessment_version=2,
-                        )
-                        recommendation = (
-                            'Review intended group sharing and group membership; check parent traversal '
-                            'and ACLs before deciding whether to restrict permissions. '
-                            'Effective access is unknown from mode bits alone.'
-                        )
-                    if 'exposed_to' in exposure:
-                        evidence['exposed_to'] = exposure['exposed_to']
-                    findings.append({'id': hashlib.sha256(('sensitive_permissions:' + raw_path).encode()).hexdigest(),
-                                     'severity': exposure.get('severity', 'high'),
-                                     'title': title,
-                                     'path': path, 'evidence': evidence,
-                                     'recommendation': recommendation,
+        if settings.get('check_permissions', False):
+            for raw_path, item in sorted(files.items()):
+                if not policy.is_finding_sensitive(Path(raw_path), item.get('type', 'file')):
+                    continue
+                path = policy.sanitise_text(raw_path)
+                if item.get('type') == 'symlink':
+                    findings.append({'id': hashlib.sha256(('sensitive_symlink:' + raw_path).encode()).hexdigest(),
+                                     'severity': 'low',
+                                     'category': 'permissions',
+                                     'title': 'sensitive path is a symlink, target not followed',
+                                     'path': path, 'evidence': {'type': 'symlink'},
+                                     'recommendation': 'Inspect the symlink target manually; link mode does not control target permissions.',
                                      'first_seen': started, 'last_seen': started, 'status': 'open',
                                      'scope_signature': signature})
+                else:
+                    exposure = _platform.access_exposure(item)
+                    if exposure:
+                        title = 'sensitive-path file is accessible beyond its owner' if _platform.NAME == 'windows' else 'sensitive-path file has group/other permission bits set'
+                        evidence: dict = {'mode': oct(exposure['mode'])}
+                        recommendation = 'Review ownership and restrict permissions manually.'
+                        if _platform.NAME != 'windows':
+                            evidence.update(
+                                severity_basis=exposure.get('severity_basis', 'unspecified_mode_evidence'),
+                                access_verified=False,
+                                assessment_version=2,
+                            )
+                            recommendation = (
+                                'Review intended group sharing and group membership; check parent traversal '
+                                'and ACLs before deciding whether to restrict permissions. '
+                                'Effective access is unknown from mode bits alone.'
+                            )
+                        if 'exposed_to' in exposure:
+                            evidence['exposed_to'] = exposure['exposed_to']
+                        findings.append({'id': hashlib.sha256(('sensitive_permissions:' + raw_path).encode()).hexdigest(),
+                                         'severity': exposure.get('severity', 'high'),
+                                         'category': 'permissions',
+                                         'title': title,
+                                         'path': path, 'evidence': evidence,
+                                         'recommendation': recommendation,
+                                         'first_seen': started, 'last_seen': started, 'status': 'open',
+                                         'scope_signature': signature})
+        av_summary = None
+        if settings.get('security_scan', True):
+            scanner = importlib.import_module('.scanner', __package__)
+            sec_findings, sec_errors, av_summary = scanner.scan_scope(
+                roots,
+                files,
+                settings,
+                state_dir=self.store.root,
+                started=started,
+                scope_signature=signature,
+                policy_module=policy,
+            )
+            findings.extend(sec_findings)
+            errors.extend(sec_errors)
         changes = []
         if baseline is not None:
             for path, item in sorted(files.items()):
@@ -196,6 +216,7 @@ class Engine:
         result = {'scan_id': uuid.uuid4().hex, 'started_at': started, 'scope_signature': signature,
                   'finished_at': datetime.now(timezone.utc).isoformat(), 'complete': bool(complete),
                   'files_checked': len(files), 'findings': findings, 'changes': changes,
+                  'av_summary': av_summary,
                   'errors': [policy.sanitise_text(str(error)) for error in errors]}
         all_exclusions = settings['exclusions'] + [str(self.store.root)]
         self.store.record_scan(result, files, signature, settings['retention_days'],
@@ -205,6 +226,42 @@ class Engine:
     def updates(self) -> dict:
         from .updates import check_updates
         return check_updates()
+
+    def av_status(self) -> dict:
+        scanner = importlib.import_module('.scanner', __package__)
+        info = scanner.detect_system_av()
+        try:
+            current = self.settings()
+        except (ValueError, OSError):
+            current = {}
+        return {
+            **info,
+            'security_scan_enabled': bool(current.get('security_scan', True)),
+            'use_system_av': bool(current.get('use_system_av', True)),
+            'check_permissions': bool(current.get('check_permissions', False)),
+            'ioc_hash_count': len(scanner.load_ioc_hashes(self.store.root)),
+        }
+
+    def apps(self, *, inventory_data: dict | None = None, updates_data: dict | None = None) -> dict:
+        apps_mod = importlib.import_module('.apps', __package__)
+        try:
+            current = self.settings()
+        except (ValueError, OSError):
+            current = None
+        if updates_data is None:
+            updates_data = self.updates()
+        return apps_mod.discover_installed_apps(current, inventory_data=inventory_data, updates_data=updates_data)
+
+    def update_protection_settings(self, patch: dict) -> dict:
+        allowed = {'check_permissions', 'security_scan', 'use_system_av'}
+        if not isinstance(patch, dict) or not patch or set(patch) - allowed:
+            raise ValueError('Only check_permissions, security_scan, and use_system_av may be toggled here')
+        for key, val in patch.items():
+            if type(val) is not bool:
+                raise ValueError(f'{key} must be a boolean')
+        current = dict(self.settings())
+        current.update(patch)
+        return self.setup(current)
 
     def findings(self) -> list[dict]:
         return self.store.findings()

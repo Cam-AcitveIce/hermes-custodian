@@ -878,11 +878,15 @@ class WebStaticAndRenderingTest(unittest.TestCase):
         for forbidden in ("innerHTML", "outerHTML", "insertAdjacentHTML", "eval(", "Function(", "new Function", "document.write"):
             self.assertNotIn(forbidden, js_body)
 
-        # app.js makes requests only to /api/session, /api/snapshot, /api/logout
+        # app.js makes requests only to allowlisted local API routes
         fetched_routes = re.findall(r'fetch\(\s*["\']([^"\']+)["\']', js_body)
         self.assertTrue(len(fetched_routes) > 0)
         for route in fetched_routes:
-            self.assertIn(route, ("/api/session", "/api/snapshot", "/api/logout"))
+            self.assertIn(route, (
+                "/api/session", "/api/snapshot", "/api/logout",
+                "/api/apps", "/api/av",
+                "/api/actions/scan", "/api/actions/update", "/api/actions/settings",
+            ))
 
         # No emoji anywhere in assets
         emoji_re = re.compile(r"[\U0001F300-\U0001FAD6\U0001F600-\U0001F64F\U0001F680-\U0001F6FF\U00002600-\U000026FF\U00002700-\U000027BF]")
@@ -1118,6 +1122,109 @@ console.log('LIVE_DOM_E2E_OK');
         )
         self.assertEqual(proc.returncode, 0, msg=f"STDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
         self.assertIn("LIVE_DOM_E2E_OK", proc.stdout)
+
+
+class WebActionsAndAppsTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR"))
+        self.tmp_path = Path(self._tmp.name)
+        self.engine = FakeEngine(self.tmp_path, configured=True)
+        self.engine.scan_calls = 0
+        self.engine.scan = self._fake_scan  # type: ignore[method-assign]
+        self.engine.update_protection_settings = self._fake_update_settings  # type: ignore[method-assign]
+        self.auth = FakeDashboardAuth(username="operator", password="secret-password")
+        self.srv = make_server(self.engine, host="127.0.0.1", port=0, auth=self.auth)
+        self.thread = threading.Thread(
+            target=self.srv.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+        )
+        self.thread.start()
+        self.cookie = self._login()
+
+    def tearDown(self) -> None:
+        self.srv.shutdown()
+        self.srv.server_close()
+        self.thread.join(timeout=2)
+        self._tmp.cleanup()
+
+    def _fake_scan(self) -> dict:
+        self.engine.scan_calls += 1
+        return {"scan_id": "scan-on-demand", "complete": True, "files_checked": 5, "findings": [], "errors": []}
+
+    def _fake_update_settings(self, patch: dict) -> dict:
+        self.engine._settings.update(patch)
+        return dict(self.engine._settings)
+
+    def _login(self) -> str:
+        conn = http.client.HTTPConnection("127.0.0.1", self.srv.bound_port, timeout=5)
+        body = json.dumps({"username": "operator", "password": "secret-password"}).encode("utf-8")
+        conn.request(
+            "POST",
+            "/api/session",
+            body=body,
+            headers={
+                "Host": f"127.0.0.1:{self.srv.bound_port}",
+                "Origin": self.srv.base_url,
+                "Content-Type": "application/json",
+            },
+        )
+        resp = conn.getresponse()
+        resp.read()
+        self.assertEqual(resp.status, 200)
+        return (resp.getheader("Set-Cookie") or "").split(";", 1)[0]
+
+    def _request(self, method: str, path: str, body: dict | None = None, *, with_auth: bool = True, with_origin: bool = True) -> tuple[int, dict]:
+        conn = http.client.HTTPConnection("127.0.0.1", self.srv.bound_port, timeout=5)
+        headers = {"Host": f"127.0.0.1:{self.srv.bound_port}"}
+        if with_auth:
+            headers["Cookie"] = self.cookie
+        if with_origin:
+            headers["Origin"] = self.srv.base_url
+        raw = None
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+            raw = json.dumps(body).encode("utf-8")
+        conn.request(method, path, body=raw, headers=headers)
+        resp = conn.getresponse()
+        data = json.loads(resp.read().decode("utf-8"))
+        return resp.status, data
+
+    def test_av_and_apps_get_endpoints(self) -> None:
+        code_av, data_av = self._request("GET", "/api/av")
+        self.assertEqual(code_av, 200)
+        self.assertTrue(data_av["builtin_heuristics"])
+
+        code_apps, data_apps = self._request("GET", "/api/apps")
+        self.assertEqual(code_apps, 200)
+        self.assertIn("hermes_plugins", data_apps)
+        self.assertIn("os_apps", data_apps)
+        self.assertIn("summary", data_apps)
+
+    def test_actions_require_origin_and_auth_and_execute(self) -> None:
+        # Missing origin -> 403
+        code_no_origin, _ = self._request("POST", "/api/actions/scan", {}, with_origin=False)
+        self.assertEqual(code_no_origin, 403)
+
+        # Unauthenticated -> 401
+        code_no_auth, _ = self._request("POST", "/api/actions/scan", {}, with_auth=False)
+        self.assertEqual(code_no_auth, 401)
+
+        # Valid scan action -> 200
+        code_scan, res_scan = self._request("POST", "/api/actions/scan", {})
+        self.assertEqual(code_scan, 200)
+        self.assertTrue(res_scan["ok"])
+        self.assertEqual(self.engine.scan_calls, 1)
+
+        # Valid settings toggle -> 200
+        code_set, res_set = self._request("POST", "/api/actions/settings", {"check_permissions": False, "security_scan": True})
+        self.assertEqual(code_set, 200)
+        self.assertTrue(res_set["ok"])
+        self.assertFalse(res_set["settings"]["check_permissions"])
+
+        # Invalid update target rejected cleanly
+        code_upd, res_upd = self._request("POST", "/api/actions/update", {"target_type": "invalid_type"})
+        self.assertEqual(code_upd, 200)
+        self.assertFalse(res_upd["ok"])
+        self.assertEqual(res_upd["status"], "invalid")
 
 
 if __name__ == "__main__":
