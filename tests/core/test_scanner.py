@@ -183,6 +183,21 @@ class AppsDiscoveryAndUpdateTests(unittest.TestCase):
                 self.assertFalse(res["ok"])
                 self.assertEqual(res["status"], "invalid")
 
+    def test_hermes_custodian_never_self_updates(self):
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as td:
+            root = Path(td)
+            self_dir = root / "plugins" / "hermes-custodian"
+            self_dir.mkdir(parents=True)
+            (self_dir / "plugin.yaml").write_text("name: hermes-custodian\nversion: '0.2.0'\n")
+            plugins, _, approved = apps.discover_hermes_plugins({"hermes_root": str(root)}, {"profiles": []})
+            self.assertTrue(approved)
+            self.assertTrue(plugins[0].get("self_plugin"))
+            self.assertFalse(plugins[0].get("updatable"))
+
+            denied = apps.run_update("hermes_plugin", "hermes-custodian", settings={"hermes_root": str(root)})
+            self.assertFalse(denied["ok"])
+            self.assertEqual(denied["status"], "denied")
+
 
 class EngineSecurityDefaultTests(unittest.TestCase):
     def setUp(self):

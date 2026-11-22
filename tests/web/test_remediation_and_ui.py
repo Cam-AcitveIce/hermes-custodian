@@ -32,6 +32,8 @@ class LiveRemediationHttpTests(unittest.TestCase):
 
         self.engine = Engine(self.state_dir)
         self.engine.setup({"watched_paths": [str(self.scope)], "use_system_av": False})
+        # Avoid slow live softwareupdate / Windows Update COM queries during HTTP export tests
+        self.engine.updates = lambda: {"status": "ok", "packages": [], "upgradable_count": 0}  # type: ignore[method-assign]
 
         self.auth = DashboardAuth(self.state_dir)
         self.auth.configure("tester", "super-long-passphrase-2026")

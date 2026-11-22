@@ -28,6 +28,12 @@ _APT_PKG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9.+-]{0,126}[a-z0-9])?(?::[a-z0-9][
 _FLATPAK_ID_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}(?:\.[A-Za-z0-9_-]{1,64})+$")
 _BREW_PKG_RE = re.compile(r"^[a-z0-9][a-z0-9@._-]{0,127}$")
 _PLUGIN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+# Catalog rule: this plugin must never update its own code.
+_SELF_PLUGIN_IDS = frozenset({"hermes-custodian", "hermes_custodian", "hermes security warden"})
+
+
+def _is_self_plugin(identifier: str | None) -> bool:
+    return isinstance(identifier, str) and identifier.strip().lower() in _SELF_PLUGIN_IDS
 
 
 def _sanitise(text: str) -> str:
@@ -209,6 +215,10 @@ def _read_plugin_metadata(plugin_dir: Path, *, has_hermes_cli: bool) -> dict[str
     if has_hermes_cli and _PLUGIN_ID_RE.fullmatch(plugin_id):
         meta["updatable"] = True
 
+    if _is_self_plugin(plugin_id) or _is_self_plugin(meta["name"]):
+        meta["self_plugin"] = True
+        meta["updatable"] = False
+
     return meta
 
 
@@ -254,6 +264,7 @@ def discover_hermes_plugins(
             for pname in prof_plugins:
                 clean = _sanitise(str(pname))
                 enabled_names.add(clean)
+                is_self = _is_self_plugin(clean)
                 plugins_by_id.setdefault(clean, {
                     "id": clean,
                     "name": clean,
@@ -263,7 +274,8 @@ def discover_hermes_plugins(
                     "path": _sanitise(prof.get("path") or ""),
                     "enabled": True,
                     "git_backed": False,
-                    "updatable": has_hermes_cli and bool(_PLUGIN_ID_RE.fullmatch(clean)),
+                    "self_plugin": is_self,
+                    "updatable": (not is_self) and has_hermes_cli and bool(_PLUGIN_ID_RE.fullmatch(clean)),
                     "kind": "hermes_plugin",
                 })
             for mname in prof_mcps:
@@ -583,8 +595,15 @@ def run_update(
     if not valid:
         return {"ok": False, "status": "invalid", "message": err_msg}
 
-    # 1. Hermes plugin updates (single or all)
+    # 1. Hermes plugin updates (single or all — strictly excluding hermes-custodian itself; no self-updater)
     if target_type in ("hermes_plugin", "hermes_plugins_all"):
+        if target_type == "hermes_plugin" and _is_self_plugin(target_name):
+            return {
+                "ok": False,
+                "status": "denied",
+                "message": "Warden never self-updates. Update it from your terminal with: hermes plugins update hermes-custodian",
+                "command": "hermes plugins update hermes-custodian",
+            }
         plugins, _, approved = discover_hermes_plugins(settings, inventory_data)
         if not approved:
             return {
@@ -595,36 +614,51 @@ def run_update(
         hermes_bin = _trusted_which("hermes", "hermes")
         if hermes_bin:
             if target_type == "hermes_plugin":
-                argv = [hermes_bin, "plugins", "update", "--", str(target_name)]
+                target_ids = [str(target_name)]
             else:
-                argv = [hermes_bin, "plugins", "update", "--yes"]
-            try:
-                res = subprocess.run(
-                    argv, stdin=subprocess.DEVNULL,
-                    capture_output=True, text=True, timeout=60, check=False, env=minimal_env("hermes"),
-                )
-                out = _sanitise((res.stdout or "") + ("\n" + res.stderr if res.stderr else "")).strip()[:2000]
-                if res.returncode == 0:
+                target_ids = [
+                    p["id"] for p in plugins
+                    if not p.get("self_plugin") and not _is_self_plugin(p.get("id")) and _PLUGIN_ID_RE.fullmatch(str(p.get("id", "")))
+                ]
+                if not target_ids:
                     return {
                         "ok": True,
                         "status": "updated",
-                        "message": out or f"Updated {target_name or 'all Hermes plugins'} successfully.",
-                        "command": " ".join(shlex.quote(a) for a in argv),
+                        "message": "No other Hermes plugins to update (hermes-custodian never self-updates).",
                     }
-                return {
-                    "ok": False,
-                    "status": "failed",
-                    "message": out or f"hermes plugins update exited with code {res.returncode}.",
-                    "command": " ".join(shlex.quote(a) for a in argv),
-                }
-            except (OSError, subprocess.TimeoutExpired) as exc:
-                return {"ok": False, "status": "failed", "message": f"Plugin update failed: {exc}"}
+            results = []
+            all_ok = True
+            last_cmd = ""
+            for pid in target_ids:
+                argv = [hermes_bin, "plugins", "update", "--", pid]
+                last_cmd = " ".join(shlex.quote(a) for a in argv)
+                try:
+                    res = subprocess.run(
+                        argv, stdin=subprocess.DEVNULL,
+                        capture_output=True, text=True, timeout=60, check=False, env=minimal_env("hermes"),
+                    )
+                    out = _sanitise((res.stdout or "") + ("\n" + res.stderr if res.stderr else "")).strip()[:800]
+                    if res.returncode != 0:
+                        all_ok = False
+                    results.append(f"{pid}: {out or ('updated' if res.returncode == 0 else f'exit {res.returncode}')}")
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    all_ok = False
+                    results.append(f"{pid}: {exc}")
+            return {
+                "ok": all_ok,
+                "status": "updated" if all_ok else "failed",
+                "message": "\n".join(results)[:2000],
+                "command": last_cmd,
+            }
 
-        # Fallback: git pull --ff-only for git-backed plugin directories under consented hermes_root
+        # Fallback: git pull --ff-only for git-backed non-self plugin directories under consented hermes_root
         consented_root = Path(settings["hermes_root"]) if (isinstance(settings, dict) and settings.get("hermes_root")) else None
         targets = [
             p for p in plugins
-            if p.get("git_backed") and (target_type == "hermes_plugins_all" or p["id"] == target_name or p["name"] == target_name)
+            if p.get("git_backed")
+            and not p.get("self_plugin")
+            and not _is_self_plugin(p.get("id"))
+            and (target_type == "hermes_plugins_all" or p["id"] == target_name or p["name"] == target_name)
         ]
         git_bin = _trusted_which("git", "git")
         if not targets or not git_bin or consented_root is None:
@@ -666,11 +700,11 @@ def run_update(
         if not flatpak_bin:
             return {"ok": False, "status": "unavailable", "message": "flatpak is not installed."}
         if installation == "system":
-            cmd_str = f"sudo flatpak update -y {shlex.quote(str(target_name))}"
+            cmd_str = f"flatpak update -y {shlex.quote(str(target_name))}"
             return {
                 "ok": False,
                 "status": "needs_elevation",
-                "message": "System-wide Flatpak apps require administrator privileges. Run this command in your terminal:",
+                "message": "System-wide Flatpak apps require administrator privileges. Run as root in your terminal:",
                 "command": cmd_str,
             }
         argv = [flatpak_bin, "update", "--user", "-y", "--", str(target_name)]
@@ -718,10 +752,10 @@ def run_update(
             "-o", "Dpkg::Options::=--force-confold",
         ]
         if target_type == "os_package" and target_name:
-            cmd_str = f"sudo apt-get update && sudo apt-get install --only-upgrade -y -- {shlex.quote(target_name)}"
+            cmd_str = f"apt-get update && apt-get install --only-upgrade -y -- {shlex.quote(target_name)}"
             apt_argv = [apt_get, *non_interactive_opts, "install", "--only-upgrade", "-y", "--", target_name]
         else:
-            cmd_str = "sudo apt-get update && sudo apt-get upgrade -y"
+            cmd_str = "apt-get update && apt-get upgrade -y"
             apt_argv = [apt_get, *non_interactive_opts, "upgrade", "-y"]
 
         has_desktop = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
@@ -754,11 +788,11 @@ def run_update(
         }
 
     if _platform.NAME == "macos":
-        cmd_str = f"sudo softwareupdate -i {shlex.quote(str(target_name))}" if target_name else "sudo softwareupdate -i -a"
+        cmd_str = f"softwareupdate -i {shlex.quote(str(target_name))}" if target_name else "softwareupdate -i -a"
         return {
             "ok": False,
             "status": "needs_elevation",
-            "message": "macOS system updates require administrator privileges. Run this command in your terminal:",
+            "message": "macOS system updates require administrator privileges. Run as root in your terminal:",
             "command": cmd_str,
         }
 

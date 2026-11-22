@@ -1470,7 +1470,9 @@
         tdStat.appendChild(makeEl("span", "status-pill " + (isEnabled ? "is-running" : "is-stopped"), isEnabled ? "installed" : "disabled"));
         tr.appendChild(tdStat);
         const tdAct = makeEl("td");
-        if (p.updatable !== false) {
+        if (p.self_plugin) {
+          tdAct.appendChild(makeEl("span", "text-muted", "Update via CLI"));
+        } else if (p.updatable !== false) {
           const updBtn = makeEl("button", "quiet-btn update-row-btn", state.inflightUpdates[inflightKey] ? "Updating..." : "Update");
           updBtn.type = "button";
           updBtn.disabled = Boolean(state.inflightUpdates[inflightKey]);

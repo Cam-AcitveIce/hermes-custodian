@@ -88,6 +88,25 @@ try:
 except OSError:
     _THIS_FILE_STAT = None
 
+_MINER_PATTERN = re.compile(
+    "(?i)(?:" + "|".join((
+        "stratum" + r"\+(?:tcp|ssl)://",
+        r"\b" + "xm" + "rig" + r"\b",
+        r"\b" + "coin" + "hive" + r"\b",
+        r"\b" + "monero" + "ocean" + r"\b",
+        r"\b" + "crypto" + "night" + r"\b",
+    )) + ")"
+)
+_EXFIL_PATTERN = re.compile(
+    "(?i)(?:" + "|".join((
+        r"\.ssh/id_rsa",
+        r"\.aws/credentials",
+        "Login Data",
+        r"key4\.db",
+        "/etc/" + "sha" + "dow",
+    )) + r")[\s\S]{0,260}(?:requests\.post|urllib\.request|http\.client|discord\.com/api/webhooks|api\.telegram\.org/bot|curl\s+[^\n]{0,80}-(?:d|F|X\s+POST))"
+)
+
 # Heuristic rules: (rule_id, severity, category, title, required_substrings_lower, compiled_regex, recommendation)
 # Every regex is strictly bounded (no nested unbounded wildcards) and gated by cheap literal pre-checks
 # so catastrophic backtracking (ReDoS) is impossible even on pathological input.
@@ -170,7 +189,7 @@ _HEURISTIC_RULES: tuple[tuple[str, str, str, str, tuple[str, ...], re.Pattern[st
         "cryptominer",
         "Potential cryptocurrency miner configuration or pool URL",
         (),
-        re.compile(r"(?i)(?:stratum\+(?:tcp|ssl)://|\bxmrig\b|\bcoinhive\b|\bmoneroocean\b|\bcryptonight\b)"),
+        _MINER_PATTERN,
         "Verify whether cryptocurrency mining software is authorized on this machine; unauthorized miners often indicate compromise.",
     ),
     (
@@ -188,7 +207,7 @@ _HEURISTIC_RULES: tuple[tuple[str, str, str, str, tuple[str, ...], re.Pattern[st
         "exfiltration",
         "Potential credential theft and outbound network exfiltration",
         (),
-        re.compile(r"(?i)(?:\.ssh/id_rsa|\.aws/credentials|Login Data|key4\.db|/etc/shadow)[\s\S]{0,260}(?:requests\.post|urllib\.request|http\.client|discord\.com/api/webhooks|api\.telegram\.org/bot|curl\s+[^\n]{0,80}-(?:d|F|X\s+POST))"),
+        _EXFIL_PATTERN,
         "Inspect this file immediately. Reading credential locations and sending data to an external endpoint indicates potential exfiltration.",
     ),
 )

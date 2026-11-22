@@ -2,13 +2,14 @@
 
 **Ask your Hermes agent "what needs attention on this machine?" and get an answer backed by evidence.**
 
-Warden watches the machine your Hermes agent runs on. It records what your files and permissions look like, notices when they change, and shows you what needs a look — in the terminal, in a local web dashboard, or through your agent.
+Warden watches the machine your Hermes agent runs on. It scans your approved folders for malware and security threats, tracks file changes against a baseline, lets you quarantine or allowlist flagged files, and gives you a **Plugins & Apps** view to inspect and update other installed plugins and apps — in the terminal, in a local authenticated web dashboard, or through your agent's read-only tools.
 
-- **Evidence, not scores.** Every finding shows the path, what's wrong, when it was seen and what to do about it.
-- **Change history.** A saved baseline turns "something is different" into a dated list of changes.
-- **You choose the scope.** Nothing is watched until you approve it. Credential files, memory and chat history are never opened.
-- **Honest about gaps.** If a scan is incomplete or its data can't be read, it says so rather than showing an empty, all-clear screen.
-- **Local only.** No telemetry, no cloud, no self-updater. The dashboard runs on your machine behind a login, and the agent can't grant itself more access.
+- **Built-in antivirus & threat scanning.** Detects EICAR signatures, SHA-256 IOC blocklist hashes, reverse/bind shells, `curl|sh` droppers, obfuscated `eval`/`exec` payloads, cryptominers, persistence, credential exfiltration, disguised ELF/PE/Mach-O binaries, Trojan Source Unicode bidi controls, SUID/SGID executables, and AI prompt-injection patterns. Automatically integrates with **ClamAV**, **Windows Defender** (`MpCmdRun.exe`), and user **YARA** rules when installed.
+- **No noisy permission alerts by default.** Sensitive-file permission checks (`.env`/auth mode bits) are opt-in and **off by default** (toggleable under **Coverage & Scope**).
+- **Quarantine, allowlist & on-demand scan.** Move flagged non-sensitive files into private `0600` non-executable quarantine (with Restore/Delete), ignore false positives, scan any ad-hoc folder/file path, manage custom SHA-256 IOC hashes, and export JSON/CSV reports.
+- **Installed Plugins & Apps.** Inspect consented Hermes plugins, MCP servers, and installed OS apps/packages (`apt`, `flatpak`, `snap`, `brew`, macOS/Windows), check for updates, and trigger safe updates for other plugins/apps (Warden **never self-updates**).
+- **You choose the scope.** Nothing is watched until you approve it. Credential files, memory and chat history are never opened — even by ClamAV, YARA, or quarantine.
+- **Local only.** No telemetry, no cloud, no self-updater. The dashboard runs on `127.0.0.1` behind a login, and the agent's four tools remain strictly read-only.
 
 Works on Linux, macOS and Windows with Python 3.11 or newer.
 
@@ -90,12 +91,14 @@ Setup asks for your consent at each step and offers to create a dashboard login 
 |---|---|
 | `warden setup` | Guided setup: find Hermes profiles and choose watched folders |
 | `warden tui` | Full-screen terminal control centre |
-| `warden scan` | Scan the approved folders once |
+| `warden scan` | Scan the approved folders for threats and changes once |
 | `warden status` | Monitoring health and coverage |
 | `warden findings` | Open findings with their evidence |
 | `warden events` | Recent changes |
+| `warden apps` | List installed Hermes plugins, MCP servers, and OS apps/packages |
+| `warden av-status` | Show built-in and system antivirus scanner status |
 | `warden monitor` | Keep scanning in the foreground (`--once` for one cycle) |
-| `warden dashboard` | Start the local web dashboard (`--port` to choose a port) |
+| `warden dashboard` | Start the local authenticated web console (`--port` to choose a port) |
 | `warden dashboard-credentials` | Set or reset the dashboard login |
 | `warden service install \| start \| status \| stop \| uninstall` | Run the monitor as a background service |
 | `warden updates` | Check for OS updates without installing anything |
@@ -104,7 +107,9 @@ Setup asks for your consent at each step and offers to create a dashboard login 
 
 ## Web dashboard
 
-`warden dashboard` serves a read-only view of findings and changes on `127.0.0.1` only. You sign in with a username and password set during setup, or with `warden dashboard-credentials` (12 characters minimum, entered at a hidden prompt).
+`warden dashboard` serves a local security console on `127.0.0.1` only (with Dark and Light themes). You sign in with a username and password set during setup, or with `warden dashboard-credentials` (12 characters minimum, entered at a hidden prompt).
+
+From the authenticated console you can trigger on-demand scans, toggle protection settings, quarantine/restore/delete flagged non-sensitive files inside approved scope, allowlist false positives, manage watched paths/exclusions/IOC hashes, export JSON/CSV reports, and run updates for other installed plugins or user apps (OS package updates use `pkexec` on desktop Linux or provide a copyable `sudo` command). Every mutating action requires a valid session cookie and exact loopback `Origin` header. Warden **never updates its own plugin code** — update Warden itself with `hermes plugins update hermes-custodian`.
 
 The password is stored only as a salted scrypt hash. Sessions expire, sign-in attempts are rate-limited, and there is no MFA. It's built for use on the same machine; to reach it from elsewhere, use SSH port forwarding.
 
@@ -147,13 +152,14 @@ warden updates security-apply --plan-id <PLAN_ID> --enable
 
 ## What it checks, and what it doesn't
 
-- **Content fingerprints** only for `.py` and `.md` files. Other files get metadata checks only (permissions, owner, size, modified time).
-- **Sensitive files** such as `.env` files, keys, OAuth stores and browser data are checked by permissions only. Their contents are never read, hashed or shown to the agent.
+- **Security & antivirus heuristics** inspect non-sensitive text/script files within bounded size and time budgets, plus SHA-256 IOC hash matching and optional **ClamAV**, **Windows Defender**, and **YARA** integration on vetted non-sensitive regular files only.
+- **Content baselines** compute SHA-256 fingerprints for `.py` and `.md` files. Other binary files get metadata checks only (permissions, owner, size, modified time).
+- **Sensitive files** such as `.env` files, keys, OAuth stores and browser data are never opened, read, hashed, scanned by external AV, quarantined, or shown to the agent. Permission-bit findings on sensitive paths are **off by default** and opt-in.
 - **Private Hermes areas** (memories, sessions, chat history) are never listed or read.
-- **Symlinks and special files** are never followed. Hitting a scan limit shows up as incomplete coverage.
-- **Permission findings** come from mode bits, so they don't account for ACLs, group membership or parent folder access. Each finding says this.
-- A changed file is not proof of malware.
-- **Not a sandbox, antivirus or EDR.** Anything running as your user could stop Warden or rewrite its data.
+- **Symlinks, hardlinks, and special files** are never followed or read. Hitting a scan budget shows up as incomplete coverage and never auto-resolves open findings.
+- **No self-updater.** The Plugins & Apps updater explicitly blocks updating `hermes-custodian` itself; update Warden through `hermes plugins update hermes-custodian`.
+- A changed file or heuristic match is evidence for review, not absolute proof of compromise.
+- **Not a kernel sandbox or EDR.** Anything running as your user could stop Warden or rewrite its data.
 - The dashboard cookie isn't tied to a port, so other local web servers in the same browser could receive it. Treat other local users as trusted.
 
 ## Privacy
@@ -176,4 +182,4 @@ The plugin and package are still named `hermes-custodian`, the Python package is
 
 ## Status
 
-Release candidate (0.1.1). The Hermes plugin catalog still lists 0.1.0.
+Version `0.2.0`. The Hermes plugin catalog currently pins `0.1.1`.

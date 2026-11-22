@@ -1012,7 +1012,7 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
             return False
         return True
 
-    def _build_snapshot(self, event_limit: int = 100) -> dict[str, Any]:
+    def _build_snapshot(self, event_limit: int = 100, *, include_updates: bool = True) -> dict[str, Any]:
         engine = self.server.engine
         has_settings, settings = _safe_settings(engine)
         status = _safe_status(engine)
@@ -1036,7 +1036,7 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
             coverage_summary = _mark_stores_unreadable(coverage_summary, data_errors)
         scope_preview = _compute_scope_preview(settings, status, configured)
         inventory_data = _collect_consented_inventory(engine, settings, configured)
-        updates_data = _safe_updates(engine)
+        updates_data = _safe_updates(engine) if include_updates else {"status": "skipped", "packages": []}
         av_status = _safe_av_status(engine, settings if configured else None)
 
         return {
@@ -1178,7 +1178,7 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
                 if fmt not in ("json", "csv"):
                     self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_format", "message": "format must be json or csv."})
                     return
-                snap = self._build_snapshot(event_limit=200)
+                snap = self._build_snapshot(event_limit=200, include_updates=(fmt == "json"))
                 stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
                 if fmt == "csv":
                     from . import remediation
