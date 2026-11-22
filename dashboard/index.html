@@ -154,9 +154,16 @@
         </div>
         <div class="header-actions">
           <button type="button" id="btn-run-scan" class="action-btn">Scan now</button>
+          <button type="button" id="btn-theme-toggle" class="quiet-btn" aria-label="Toggle light or dark theme" title="Switch theme">Light</button>
+          <button type="button" id="btn-logout-mobile" class="quiet-btn mobile-signout-btn">Sign out</button>
           <span class="refresh-label"><span id="header-now-mono" class="mono">Updated —</span></span>
         </div>
       </header>
+
+      <div id="warden-toast" class="warden-toast is-hidden" role="status" aria-live="polite">
+        <span id="warden-toast-text"></span>
+        <button type="button" id="warden-toast-close" class="quiet-btn">Dismiss</button>
+      </div>
 
       <main id="main-content" class="main-content" tabindex="-1">
         <section id="state-loading" class="state-panel" aria-label="Loading posture data">
@@ -205,6 +212,25 @@
             <p id="verdict-detail" class="verdict-detail">No open findings recorded across watched paths.</p>
           </div>
 
+          <div class="panel quick-actions-panel">
+            <div class="panel-header">
+              <div class="panel-title-wrap">
+                <h2 class="panel-title">Quick Actions &amp; On-Demand Scan</h2>
+              </div>
+              <div class="panel-header-actions">
+                <a id="btn-export-json" class="quiet-btn action-link-btn" href="/api/export?format=json">Export JSON</a>
+                <a id="btn-export-csv" class="quiet-btn action-link-btn" href="/api/export?format=csv">Export CSV</a>
+                <button type="button" id="btn-quick-goto-apps" class="quiet-btn">Plugins &amp; Apps</button>
+              </div>
+            </div>
+            <form id="quick-scan-form" class="inline-action-form">
+              <label for="quick-scan-input" class="sr-only">Absolute file or folder path to scan</label>
+              <input type="text" id="quick-scan-input" class="control-input inline-grow" placeholder="Scan any absolute file or folder path (e.g. /home/user/Downloads)...">
+              <button type="submit" id="btn-quick-scan-submit" class="action-btn">Scan path</button>
+            </form>
+            <div id="quick-scan-results" class="quick-scan-results is-hidden"></div>
+          </div>
+
           <div class="panel">
             <div class="panel-header">
               <div class="panel-title-wrap">
@@ -230,31 +256,31 @@
           <div class="quiet-facts-section" aria-label="Posture facts">
             <h2 class="section-eyebrow">Quiet facts</h2>
             <div class="facts-grid">
-              <div class="fact-card">
+              <button type="button" class="fact-card fact-card--interactive" data-jump-view="coverage">
                 <div class="fact-label">Coverage</div>
                 <div id="fact-coverage-val" class="fact-value">—</div>
                 <div id="fact-coverage-sub" class="fact-sub mono">—</div>
-              </div>
-              <div class="fact-card">
+              </button>
+              <button type="button" class="fact-card fact-card--interactive" data-jump-view="coverage">
                 <div class="fact-label">Watched scope</div>
                 <div id="fact-scope-val" class="fact-value">—</div>
                 <div id="fact-scope-sub" class="fact-sub mono">—</div>
-              </div>
-              <div class="fact-card">
+              </button>
+              <button type="button" class="fact-card fact-card--interactive" data-jump-view="profiles">
                 <div class="fact-label">Hermes profiles</div>
                 <div id="fact-profiles-val" class="fact-value">—</div>
                 <div id="fact-profiles-sub" class="fact-sub mono">—</div>
-              </div>
-              <div class="fact-card">
+              </button>
+              <button type="button" class="fact-card fact-card--interactive" data-jump-view="findings">
                 <div class="fact-label">Antivirus &amp; Scanner</div>
                 <div id="fact-av-val" class="fact-value">—</div>
                 <div id="fact-av-sub" class="fact-sub mono">—</div>
-              </div>
-              <div class="fact-card">
+              </button>
+              <button type="button" class="fact-card fact-card--interactive" data-jump-view="apps">
                 <div class="fact-label">OS updates</div>
                 <div id="fact-updates-val" class="fact-value">—</div>
                 <div id="fact-updates-sub" class="fact-sub">security classification unknown</div>
-              </div>
+              </button>
             </div>
           </div>
         </section>
@@ -280,9 +306,29 @@
                 </select>
               </div>
 
+              <div class="toolbar-group" role="group" aria-label="Filter by category">
+                <label for="category-select" class="sr-only">Category</label>
+                <select id="category-select" class="control-select">
+                  <option value="all">All categories</option>
+                  <option value="antivirus">Antivirus</option>
+                  <option value="malware_signature">Malware signature</option>
+                  <option value="ioc_hash">IOC hash</option>
+                  <option value="reverse_shell">Reverse shell</option>
+                  <option value="dropper">Dropper</option>
+                  <option value="obfuscation">Obfuscation</option>
+                  <option value="cryptominer">Cryptominer</option>
+                  <option value="exfiltration">Exfiltration</option>
+                  <option value="disguised_binary">Disguised binary</option>
+                  <option value="trojan_source">Trojan Source</option>
+                  <option value="agent_security">Agent security</option>
+                  <option value="privilege_escalation">Privilege escalation</option>
+                  <option value="permissions">Permissions</option>
+                </select>
+              </div>
+
               <div class="toolbar-search">
                 <label for="findings-search" class="sr-only">Search findings</label>
-                <input type="search" id="findings-search" class="control-input" placeholder="Search title, path, evidence...">
+                <input type="search" id="findings-search" class="control-input" placeholder="Search title, category, path, evidence...">
               </div>
             </div>
 
@@ -309,6 +355,50 @@
                 </thead>
                 <tbody id="findings-tbody"></tbody>
               </table>
+            </div>
+          </div>
+
+          <div class="two-col-grid">
+            <div class="panel">
+              <div class="panel-header">
+                <div class="panel-title-wrap">
+                  <h2 class="panel-title">Quarantine Vault</h2>
+                  <span id="quarantine-count" class="count-pill">0</span>
+                </div>
+              </div>
+              <div class="table-wrap">
+                <table class="data-table" aria-label="Quarantined files">
+                  <thead>
+                    <tr>
+                      <th scope="col">Original path</th>
+                      <th scope="col">Quarantined</th>
+                      <th scope="col">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="quarantine-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-header">
+                <div class="panel-title-wrap">
+                  <h2 class="panel-title">Ignored / Allowlisted</h2>
+                  <span id="allowlist-count" class="count-pill">0</span>
+                </div>
+              </div>
+              <div class="table-wrap">
+                <table class="data-table" aria-label="Allowlisted findings">
+                  <thead>
+                    <tr>
+                      <th scope="col">Path / Rule</th>
+                      <th scope="col">Reason</th>
+                      <th scope="col">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody id="allowlist-tbody"></tbody>
+                </table>
+              </div>
             </div>
           </div>
         </section>
@@ -411,7 +501,10 @@
                 <tbody id="apps-os-tbody"></tbody>
               </table>
             </div>
-            <div id="apps-os-truncation" class="compact-empty-row is-hidden"></div>
+            <div id="apps-os-truncation" class="compact-empty-row is-hidden">
+              <span id="apps-os-truncation-text"></span>
+              <button type="button" id="btn-apps-load-more" class="quiet-btn">Load more</button>
+            </div>
           </div>
         </section>
 
@@ -504,7 +597,12 @@
                 <h2 class="panel-title">Watched paths</h2>
                 <span id="coverage-watched-count" class="count-pill">0</span>
               </div>
-              <ul id="coverage-watched-list" class="mono-list"></ul>
+              <form id="scope-add-path-form" class="inline-action-form">
+                <label for="scope-add-path-input" class="sr-only">Add watched folder path</label>
+                <input type="text" id="scope-add-path-input" class="control-input inline-grow" placeholder="/absolute/path/to/watch">
+                <button type="submit" class="quiet-btn">Add folder</button>
+              </form>
+              <ul id="coverage-watched-list" class="mono-list mono-list--interactive"></ul>
             </div>
 
             <div class="panel">
@@ -512,7 +610,41 @@
                 <h2 class="panel-title">Excluded directory names</h2>
                 <span id="coverage-exclusions-count" class="count-pill">0</span>
               </div>
-              <ul id="coverage-exclusions-list" class="mono-list"></ul>
+              <form id="scope-add-excl-form" class="inline-action-form">
+                <label for="scope-add-excl-input" class="sr-only">Add exclusion pattern</label>
+                <input type="text" id="scope-add-excl-input" class="control-input inline-grow" placeholder="e.g. dist or *.tmp">
+                <button type="submit" class="quiet-btn">Add exclusion</button>
+              </form>
+              <ul id="coverage-exclusions-list" class="mono-list mono-list--interactive"></ul>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <div class="panel-title-wrap">
+                <h2 class="panel-title">Custom IOC Blocklist (SHA-256)</h2>
+                <span id="ioc-count" class="count-pill">0</span>
+              </div>
+            </div>
+            <form id="ioc-add-form" class="inline-action-form">
+              <label for="ioc-hash-input" class="sr-only">SHA-256 hash</label>
+              <input type="text" id="ioc-hash-input" class="control-input inline-grow mono" placeholder="64-character SHA-256 hash">
+              <label for="ioc-desc-input" class="sr-only">Hash description</label>
+              <input type="text" id="ioc-desc-input" class="control-input" placeholder="Description (optional)">
+              <button type="submit" class="action-btn">Add hash</button>
+            </form>
+            <div class="table-wrap">
+              <table class="data-table" aria-label="IOC SHA-256 blocklist">
+                <thead>
+                  <tr>
+                    <th scope="col">SHA-256</th>
+                    <th scope="col">Description</th>
+                    <th scope="col">Source</th>
+                    <th scope="col">Action</th>
+                  </tr>
+                </thead>
+                <tbody id="ioc-tbody"></tbody>
+              </table>
             </div>
           </div>
         </section>
@@ -598,6 +730,14 @@
         </div>
 
         <h2 id="drawer-title" class="drawer-heading">—</h2>
+
+        <div class="drawer-section">
+          <div class="drawer-label">Remediation actions</div>
+          <div class="drawer-action-row">
+            <button type="button" id="drawer-quarantine-btn" class="action-btn">Quarantine file</button>
+            <button type="button" id="drawer-allowlist-btn" class="quiet-btn">Ignore (false positive)</button>
+          </div>
+        </div>
 
         <div class="drawer-section">
           <div class="drawer-label">Target path</div>
@@ -705,7 +845,7 @@
         </div>
         <div>
           <h2 class="login-title">Hermes Security Warden</h2>
-          <p class="login-sub">Local read-only posture console</p>
+          <p class="login-sub">Local security &amp; antivirus console</p>
         </div>
       </div>
 
@@ -721,7 +861,7 @@
           <input type="password" id="login-password" class="control-input" value="" autocomplete="current-password" required>
         </div>
         <div class="login-actions">
-          <button type="submit" id="login-submit-btn" class="primary-btn">Unlock read-only console</button>
+          <button type="submit" id="login-submit-btn" class="primary-btn">Unlock console</button>
         </div>
       </form>
       <p class="login-footnote">Credentials, memory and chat history are never read. Session is local-only.</p>

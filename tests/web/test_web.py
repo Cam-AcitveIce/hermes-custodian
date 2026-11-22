@@ -884,8 +884,10 @@ class WebStaticAndRenderingTest(unittest.TestCase):
         for route in fetched_routes:
             self.assertIn(route, (
                 "/api/session", "/api/snapshot", "/api/logout",
-                "/api/apps", "/api/av",
-                "/api/actions/scan", "/api/actions/update", "/api/actions/settings",
+                "/api/apps", "/api/av", "/api/quarantine", "/api/allowlist", "/api/ioc",
+                "/api/actions/scan", "/api/actions/scan-target", "/api/actions/update",
+                "/api/actions/settings", "/api/actions/scope",
+                "/api/actions/quarantine", "/api/actions/allowlist", "/api/actions/ioc",
             ))
 
         # No emoji anywhere in assets
@@ -1249,6 +1251,24 @@ class WebActionsAndAppsTest(unittest.TestCase):
             self.assertEqual(code_upd, 400)
             self.assertFalse(res_upd["ok"])
             self.assertEqual(res_upd["status"], "invalid")
+
+    def test_export_json_and_csv_endpoints(self) -> None:
+        conn = http.client.HTTPConnection("127.0.0.1", self.srv.bound_port, timeout=5)
+        conn.request(
+            "GET",
+            "/api/export?format=csv",
+            headers={"Host": f"127.0.0.1:{self.srv.bound_port}", "Cookie": self.cookie},
+        )
+        resp = conn.getresponse()
+        body = resp.read().decode("utf-8")
+        self.assertEqual(resp.status, 200)
+        self.assertIn("text/csv", resp.getheader("Content-Type") or "")
+        self.assertIn("attachment; filename=\"warden-report-", resp.getheader("Content-Disposition") or "")
+        self.assertIn("id,severity,category,status,title,path", body)
+        self.assertIn("find-1", body)
+
+        code_bad, _ = self._request("GET", "/api/export?format=xml")
+        self.assertEqual(code_bad, 400)
 
 
 if __name__ == "__main__":

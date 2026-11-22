@@ -462,6 +462,7 @@
     activeView: "overview",
     statusFilter: "all",
     severityFilter: "all",
+    categoryFilter: "all",
     searchQuery: "",
     sortField: "severity",
     sortAsc: false,
@@ -474,7 +475,12 @@
     appsLoading: false,
     appsFilter: "all",
     appsSearch: "",
+    appsLimit: 200,
+    quarantineItems: [],
+    allowlistEntries: [],
+    iocHashes: [],
     inflightUpdates: {},
+    toastTimer: null,
     isScanning: false,
     pollTimer: null,
     isSubmittingLogin: false
@@ -835,6 +841,7 @@
       if (state.severityFilter === "review") {
         if (f.assessment_state !== "previous_rule") return false;
       } else if (state.severityFilter !== "all" && (f.assessment_state === "previous_rule" || f.severity !== state.severityFilter)) return false;
+      if (state.categoryFilter !== "all" && f.category !== state.categoryFilter) return false;
       if (query) {
         const hay = (
           f.id + " " +
@@ -1202,8 +1209,18 @@
       watchedList.appendChild(makeEl("li", "", "No watched paths configured."));
     } else {
       watchedPaths.forEach(function (p) {
-        const item = makeEl("li", "", truncateMiddle(p, 42));
-        item.title = p;
+        const item = makeEl("li", "mono-list-row");
+        const labelSpan = makeEl("span", "mono-list-text", truncateMiddle(p, 42));
+        labelSpan.title = p;
+        item.appendChild(labelSpan);
+        if (watchedPaths.length > 1) {
+          const rmBtn = makeEl("button", "quiet-btn list-remove-btn", "Remove");
+          rmBtn.type = "button";
+          rmBtn.addEventListener("click", function () {
+            mutateScope("remove_path", p);
+          });
+          item.appendChild(rmBtn);
+        }
         watchedList.appendChild(item);
       });
     }
@@ -1218,8 +1235,16 @@
       exclList.appendChild(makeEl("li", "", "No exclusion directory patterns configured."));
     } else {
       exclusions.forEach(function (ex) {
-        const item = makeEl("li", "", truncateMiddle(ex, 42));
-        item.title = ex;
+        const item = makeEl("li", "mono-list-row");
+        const labelSpan = makeEl("span", "mono-list-text", truncateMiddle(ex, 42));
+        labelSpan.title = ex;
+        item.appendChild(labelSpan);
+        const rmBtn = makeEl("button", "quiet-btn list-remove-btn", "Remove");
+        rmBtn.type = "button";
+        rmBtn.addEventListener("click", function () {
+          mutateScope("remove_exclusion", ex);
+        });
+        item.appendChild(rmBtn);
         exclList.appendChild(item);
       });
     }
@@ -1502,7 +1527,7 @@
       osTbody.appendChild(tr);
       if (truncEl) truncEl.classList.add("is-hidden");
     } else {
-      const shown = filteredOs.slice(0, 200);
+      const shown = filteredOs.slice(0, state.appsLimit);
       shown.forEach(function (a) {
         const tr = makeEl("tr");
         const tdName = makeEl("td");
@@ -1536,15 +1561,345 @@
         osTbody.appendChild(tr);
       });
       if (truncEl) {
+        const truncText = document.getElementById("apps-os-truncation-text");
+        const moreBtn = document.getElementById("btn-apps-load-more");
         const total = Math.max(filteredOs.length, Number(summary.os_apps_count || 0));
-        if (filteredOs.length > 200 || (state.appsFilter === "all" && !query && total > shown.length)) {
-          truncEl.textContent = "Showing " + shown.length + " of " + total + " matching items. Use search or filters to narrow results.";
+        if (filteredOs.length > shown.length || (state.appsFilter === "all" && !query && total > shown.length)) {
+          const msg = "Showing " + shown.length + " of " + total + " matching items.";
+          if (truncText) truncText.textContent = msg; else truncEl.textContent = msg;
+          if (moreBtn) moreBtn.classList.toggle("is-hidden", filteredOs.length <= shown.length);
           truncEl.classList.remove("is-hidden");
         } else {
           truncEl.classList.add("is-hidden");
         }
       }
     }
+  }
+
+  function showToast(message, tone) {
+    const toast = document.getElementById("warden-toast");
+    const textEl = document.getElementById("warden-toast-text");
+    if (!toast || !textEl) return;
+    if (state.toastTimer) {
+      clearTimeout(state.toastTimer);
+      state.toastTimer = null;
+    }
+    textEl.textContent = String(message || "");
+    toast.classList.remove("is-hidden", "is-error", "is-warn", "is-success");
+    toast.classList.add(tone === "error" ? "is-error" : (tone === "warn" ? "is-warn" : "is-success"));
+    state.toastTimer = setTimeout(function () {
+      toast.classList.add("is-hidden");
+    }, 5500);
+  }
+
+  function applyTheme(theme) {
+    const normalized = theme === "light" ? "light" : "dark";
+    if (document.documentElement) {
+      document.documentElement.setAttribute("data-theme", normalized);
+    }
+    const btn = document.getElementById("btn-theme-toggle");
+    if (btn) {
+      btn.textContent = normalized === "light" ? "Dark" : "Light";
+    }
+    try {
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem("warden_theme", normalized);
+      }
+    } catch (_e) {}
+  }
+
+  function runCustomTargetScan(targetPath) {
+    const trimmed = String(targetPath || "").trim();
+    if (!trimmed) return;
+    const submitBtn = document.getElementById("btn-quick-scan-submit");
+    const resBox = document.getElementById("quick-scan-results");
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Scanning...";
+    }
+    fetch("/api/actions/scan-target", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({ path: trimmed })
+    }).then(function (resp) {
+      if (resp.status === 401) { showLogin(); return null; }
+      return resp.json().catch(function () { return { ok: false, message: "Scan failed (HTTP " + resp.status + ")" }; });
+    }).then(function (res) {
+      if (!res || !resBox) return;
+      clearChildren(resBox);
+      resBox.classList.remove("is-hidden");
+      if (!res.ok) {
+        resBox.appendChild(makeEl("div", "text-error", res.message || "Target scan failed."));
+        showToast(res.message || "Target scan failed.", "error");
+        return;
+      }
+      const findings = Array.isArray(res.findings) ? res.findings : [];
+      const summary = makeEl(
+        "div",
+        "quick-scan-summary mono",
+        "Scanned " + res.target + " (" + res.files_checked + " files in " + res.duration_ms + " ms) · " + findings.length + " finding" + (findings.length === 1 ? "" : "s")
+      );
+      resBox.appendChild(summary);
+      if (findings.length === 0) {
+        resBox.appendChild(makeEl("div", "text-muted", "No threats detected in target."));
+        showToast("Target scan finished: 0 findings.", "success");
+      } else {
+        findings.slice(0, 20).forEach(function (f) {
+          const row = makeEl("div", "quick-scan-hit");
+          row.appendChild(makeEl("span", "sev-badge is-" + String(f.severity || "high").toLowerCase(), String(f.severity || "HIGH").toUpperCase()));
+          row.appendChild(makeEl("span", "finding-row-title", capitaliseTitle(f.title)));
+          row.appendChild(makeEl("span", "mono text-muted", truncateMiddle(f.path, 48)));
+          resBox.appendChild(row);
+        });
+        showToast("Target scan found " + findings.length + " threat(s).", "warn");
+      }
+    }).catch(function () {
+      showToast("Connection error during target scan.", "error");
+    }).finally(function () {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Scan path";
+      }
+    });
+  }
+
+  function mutateScope(action, value) {
+    return fetch("/api/actions/scope", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({ action: action, value: value })
+    }).then(function (resp) {
+      if (resp.status === 401) { showLogin(); return null; }
+      return resp.json().catch(function () { return { ok: false, message: "Scope update failed." }; });
+    }).then(function (res) {
+      if (!res) return;
+      if (res.ok) {
+        showToast("Scope updated. Click Scan now to refresh baseline.", "success");
+        loadSnapshot();
+      } else {
+        showToast(res.message || "Could not update scope.", "error");
+      }
+    }).catch(function () {
+      showToast("Connection error updating scope.", "error");
+    });
+  }
+
+  function loadRemediationData() {
+    Promise.all([
+      fetch("/api/quarantine", { method: "GET", credentials: "same-origin", headers: { "Accept": "application/json" } })
+        .then(function (r) { return r.ok ? r.json() : { items: [] }; })
+        .catch(function () { return { items: [] }; }),
+      fetch("/api/allowlist", { method: "GET", credentials: "same-origin", headers: { "Accept": "application/json" } })
+        .then(function (r) { return r.ok ? r.json() : { entries: [] }; })
+        .catch(function () { return { entries: [] }; })
+    ]).then(function (results) {
+      state.quarantineItems = Array.isArray(results[0].items) ? results[0].items : [];
+      state.allowlistEntries = Array.isArray(results[1].entries) ? results[1].entries : [];
+      renderRemediationPanels();
+    });
+  }
+
+  function renderRemediationPanels() {
+    const qTbody = document.getElementById("quarantine-tbody");
+    const qCount = document.getElementById("quarantine-count");
+    if (qCount) qCount.textContent = String(state.quarantineItems.length);
+    if (qTbody) {
+      clearChildren(qTbody);
+      if (state.quarantineItems.length === 0) {
+        const tr = makeEl("tr");
+        const td = makeEl("td", "text-muted", "No files in quarantine.");
+        td.colSpan = 3;
+        tr.appendChild(td);
+        qTbody.appendChild(tr);
+      } else {
+        state.quarantineItems.forEach(function (it) {
+          const tr = makeEl("tr");
+          const tdPath = makeEl("td", "mono", truncateMiddle(it.original_path, 38));
+          tdPath.title = it.original_path + (it.sha256 ? (" (SHA-256: " + it.sha256 + ")") : "");
+          tr.appendChild(tdPath);
+          const tf = formatLocalTimestamp(it.quarantined_at);
+          tr.appendChild(makeEl("td", "mono", tf.display));
+          const tdAct = makeEl("td", "inline-btn-cell");
+          const restoreBtn = makeEl("button", "quiet-btn update-row-btn", "Restore");
+          restoreBtn.type = "button";
+          restoreBtn.addEventListener("click", function () {
+            quarantineAction("restore", { id: it.id });
+          });
+          const delBtn = makeEl("button", "quiet-btn update-row-btn text-error", "Delete");
+          delBtn.type = "button";
+          delBtn.addEventListener("click", function () {
+            if (typeof window !== "undefined" && typeof window.confirm === "function" && !window.confirm("Permanently delete quarantined file?")) return;
+            quarantineAction("delete", { id: it.id });
+          });
+          tdAct.appendChild(restoreBtn);
+          tdAct.appendChild(delBtn);
+          tr.appendChild(tdAct);
+          qTbody.appendChild(tr);
+        });
+      }
+    }
+
+    const aTbody = document.getElementById("allowlist-tbody");
+    const aCount = document.getElementById("allowlist-count");
+    if (aCount) aCount.textContent = String(state.allowlistEntries.length);
+    if (aTbody) {
+      clearChildren(aTbody);
+      if (state.allowlistEntries.length === 0) {
+        const tr = makeEl("tr");
+        const td = makeEl("td", "text-muted", "No allowlisted / ignored findings.");
+        td.colSpan = 3;
+        tr.appendChild(td);
+        aTbody.appendChild(tr);
+      } else {
+        state.allowlistEntries.forEach(function (e) {
+          const tr = makeEl("tr");
+          const label = (e.path ? truncateMiddle(e.path, 32) : (e.finding_id || "—")) + (e.rule ? (" [" + e.rule + "]") : "");
+          const tdPath = makeEl("td", "mono", label);
+          tdPath.title = e.path || e.finding_id || "";
+          tr.appendChild(tdPath);
+          tr.appendChild(makeEl("td", "text-muted", e.reason || "Ignored"));
+          const tdAct = makeEl("td");
+          const rmBtn = makeEl("button", "quiet-btn update-row-btn", "Remove");
+          rmBtn.type = "button";
+          rmBtn.addEventListener("click", function () {
+            allowlistAction("remove", { id: e.id });
+          });
+          tdAct.appendChild(rmBtn);
+          tr.appendChild(tdAct);
+          aTbody.appendChild(tr);
+        });
+      }
+    }
+  }
+
+  function quarantineAction(action, payload) {
+    const body = Object.assign({ action: action }, payload || {});
+    return fetch("/api/actions/quarantine", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (resp) {
+      if (resp.status === 401) { showLogin(); return null; }
+      return resp.json().catch(function () { return { ok: false, message: "Quarantine request failed." }; });
+    }).then(function (res) {
+      if (!res) return;
+      if (res.ok) {
+        const msg = action === "quarantine" ? "File moved to quarantine." : (action === "restore" ? "File restored from quarantine." : "Quarantined file deleted.");
+        showToast(msg, "success");
+        if (action === "quarantine") {
+          closeDrawer();
+          triggerScan();
+        }
+        loadRemediationData();
+        loadSnapshot();
+      } else {
+        showToast(res.message || "Quarantine action failed.", "error");
+      }
+    }).catch(function () {
+      showToast("Connection error during quarantine action.", "error");
+    });
+  }
+
+  function allowlistAction(action, payload) {
+    const body = Object.assign({ action: action }, payload || {});
+    return fetch("/api/actions/allowlist", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (resp) {
+      if (resp.status === 401) { showLogin(); return null; }
+      return resp.json().catch(function () { return { ok: false, message: "Allowlist request failed." }; });
+    }).then(function (res) {
+      if (!res) return;
+      if (res.ok) {
+        showToast(action === "add" ? "Finding added to allowlist. Rescanning..." : "Allowlist entry removed.", "success");
+        if (action === "add") {
+          closeDrawer();
+          triggerScan();
+        }
+        loadRemediationData();
+      } else {
+        showToast(res.message || "Allowlist update failed.", "error");
+      }
+    }).catch(function () {
+      showToast("Connection error updating allowlist.", "error");
+    });
+  }
+
+  function loadIocData() {
+    fetch("/api/ioc", {
+      method: "GET",
+      credentials: "same-origin",
+      headers: { "Accept": "application/json" }
+    }).then(function (r) {
+      return r.ok ? r.json() : { hashes: [] };
+    }).then(function (data) {
+      state.iocHashes = Array.isArray(data.hashes) ? data.hashes : [];
+      renderIocTable();
+    }).catch(function () {});
+  }
+
+  function renderIocTable() {
+    const tbody = document.getElementById("ioc-tbody");
+    const countEl = document.getElementById("ioc-count");
+    if (countEl) countEl.textContent = String(state.iocHashes.length);
+    if (!tbody) return;
+    clearChildren(tbody);
+    if (state.iocHashes.length === 0) {
+      const tr = makeEl("tr");
+      const td = makeEl("td", "text-muted", "No IOC hashes configured.");
+      td.colSpan = 4;
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+      return;
+    }
+    state.iocHashes.forEach(function (h) {
+      const tr = makeEl("tr");
+      const tdHash = makeEl("td", "mono", truncateMiddle(h.sha256, 28));
+      tdHash.title = h.sha256;
+      tr.appendChild(tdHash);
+      tr.appendChild(makeEl("td", "", h.description || "Custom IOC"));
+      tr.appendChild(makeEl("td", "mono", h.builtin ? "built-in" : "custom"));
+      const tdAct = makeEl("td");
+      if (h.builtin) {
+        tdAct.appendChild(makeEl("span", "text-muted", "—"));
+      } else {
+        const rmBtn = makeEl("button", "quiet-btn update-row-btn", "Remove");
+        rmBtn.type = "button";
+        rmBtn.addEventListener("click", function () {
+          iocAction("remove", h.sha256, "");
+        });
+        tdAct.appendChild(rmBtn);
+      }
+      tr.appendChild(tdAct);
+      tbody.appendChild(tr);
+    });
+  }
+
+  function iocAction(action, sha256, description) {
+    return fetch("/api/actions/ioc", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({ action: action, sha256: sha256, description: description || "" })
+    }).then(function (resp) {
+      if (resp.status === 401) { showLogin(); return null; }
+      return resp.json().catch(function () { return { ok: false, message: "IOC update failed." }; });
+    }).then(function (res) {
+      if (!res) return;
+      if (res.ok) {
+        showToast(action === "add" ? "IOC hash added to blocklist." : "IOC hash removed.", "success");
+        loadIocData();
+      } else {
+        showToast(res.message || "Invalid IOC hash.", "error");
+      }
+    }).catch(function () {
+      showToast("Connection error updating IOC blocklist.", "error");
+    });
   }
 
   function triggerScan() {
@@ -1568,8 +1923,12 @@
       return resp.json().catch(function () { return { ok: false, message: "Scan returned HTTP " + resp.status }; });
     }).then(function (res) {
       if (res && res.ok) {
+        const cnt = (res.scan && Array.isArray(res.scan.findings)) ? res.scan.findings.length : 0;
+        const checked = (res.scan && res.scan.files_checked) ? res.scan.files_checked : 0;
+        showToast("Scan complete: " + checked + " files checked, " + cnt + " finding(s).", cnt > 0 ? "warn" : "success");
         loadSnapshot();
       } else if (res && res.message) {
+        showToast("Scan error: " + res.message, "error");
         showRefreshError("Scan error: " + res.message);
       }
     }).catch(function () {
@@ -1750,6 +2109,34 @@
     const pathEl = document.getElementById("drawer-path");
     if (pathEl) pathEl.textContent = finding.path;
 
+    const qBtn = document.getElementById("drawer-quarantine-btn");
+    if (qBtn) {
+      const canQuarantine = finding.status === "open" && finding.category !== "permissions";
+      qBtn.disabled = !canQuarantine;
+      qBtn.onclick = function () {
+        if (!canQuarantine) return;
+        if (typeof window !== "undefined" && typeof window.confirm === "function" && !window.confirm("Move this file into Warden quarantine (0600, non-executable)?")) return;
+        quarantineAction("quarantine", {
+          path: finding.path,
+          finding_id: finding.id,
+          reason: finding.title
+        });
+      };
+    }
+
+    const alBtn = document.getElementById("drawer-allowlist-btn");
+    if (alBtn) {
+      alBtn.onclick = function () {
+        const rule = (finding.evidence && finding.evidence.rule) ? finding.evidence.rule : null;
+        allowlistAction("add", {
+          finding_id: finding.id,
+          path: finding.path,
+          rule: rule,
+          reason: "Ignored from dashboard"
+        });
+      };
+    }
+
     const copyBtn = document.getElementById("drawer-copy-path-btn");
     if (copyBtn) {
       copyBtn.onclick = function () {
@@ -1842,6 +2229,12 @@
     state.activeView = viewName;
     if (viewName === "apps" && !state.appsData) {
       loadApps(false);
+    }
+    if (viewName === "findings") {
+      loadRemediationData();
+    }
+    if (viewName === "coverage") {
+      loadIocData();
     }
     if (state.currentData) {
       renderAll(state.currentData);
@@ -2018,21 +2411,125 @@
       });
     }
 
+    try {
+      const savedTheme = typeof localStorage !== "undefined" ? localStorage.getItem("warden_theme") : null;
+      applyTheme(savedTheme === "light" ? "light" : "dark");
+    } catch (_e) {}
+
+    const themeBtn = document.getElementById("btn-theme-toggle");
+    if (themeBtn) {
+      themeBtn.addEventListener("click", function () {
+        const cur = document.documentElement ? document.documentElement.getAttribute("data-theme") : "dark";
+        applyTheme(cur === "light" ? "dark" : "light");
+      });
+    }
+
+    const toastClose = document.getElementById("warden-toast-close");
+    if (toastClose) {
+      toastClose.addEventListener("click", function () {
+        const t = document.getElementById("warden-toast");
+        if (t) t.classList.add("is-hidden");
+      });
+    }
+
+    function performLogout() {
+      fetch("/api/logout", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: "{}"
+      }).then(function () {
+        closeDrawer();
+        showLogin();
+      }).catch(function () {
+        closeDrawer();
+        showLogin();
+      });
+    }
+
     const logoutBtn = document.getElementById("btn-logout");
-    if (logoutBtn) {
-      logoutBtn.addEventListener("click", function () {
-        fetch("/api/logout", {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json" },
-          body: "{}"
-        }).then(function () {
-          closeDrawer();
-          showLogin();
-        }).catch(function () {
-          closeDrawer();
-          showLogin();
-        });
+    if (logoutBtn) logoutBtn.addEventListener("click", performLogout);
+    const mobileLogoutBtn = document.getElementById("btn-logout-mobile");
+    if (mobileLogoutBtn) mobileLogoutBtn.addEventListener("click", performLogout);
+
+    document.querySelectorAll("[data-jump-view]").forEach(function (card) {
+      card.addEventListener("click", function () {
+        switchView(card.getAttribute("data-jump-view"));
+      });
+    });
+
+    const quickAppsBtn = document.getElementById("btn-quick-goto-apps");
+    if (quickAppsBtn) {
+      quickAppsBtn.addEventListener("click", function () {
+        switchView("apps");
+      });
+    }
+
+    const quickScanForm = document.getElementById("quick-scan-form");
+    if (quickScanForm) {
+      quickScanForm.addEventListener("submit", function (e) {
+        e.preventDefault();
+        const inp = document.getElementById("quick-scan-input");
+        if (inp && inp.value.trim()) {
+          runCustomTargetScan(inp.value.trim());
+        }
+      });
+    }
+
+    const catSelect = document.getElementById("category-select");
+    if (catSelect) {
+      catSelect.addEventListener("change", function () {
+        state.categoryFilter = catSelect.value;
+        if (state.currentData) renderFindings(state.currentData);
+      });
+    }
+
+    const loadMoreBtn = document.getElementById("btn-apps-load-more");
+    if (loadMoreBtn) {
+      loadMoreBtn.addEventListener("click", function () {
+        state.appsLimit += 200;
+        renderApps();
+      });
+    }
+
+    const addPathForm = document.getElementById("scope-add-path-form");
+    if (addPathForm) {
+      addPathForm.addEventListener("submit", function (e) {
+        e.preventDefault();
+        const inp = document.getElementById("scope-add-path-input");
+        if (inp && inp.value.trim()) {
+          mutateScope("add_path", inp.value.trim()).then(function () {
+            inp.value = "";
+          });
+        }
+      });
+    }
+
+    const addExclForm = document.getElementById("scope-add-excl-form");
+    if (addExclForm) {
+      addExclForm.addEventListener("submit", function (e) {
+        e.preventDefault();
+        const inp = document.getElementById("scope-add-excl-input");
+        if (inp && inp.value.trim()) {
+          mutateScope("add_exclusion", inp.value.trim()).then(function () {
+            inp.value = "";
+          });
+        }
+      });
+    }
+
+    const addIocForm = document.getElementById("ioc-add-form");
+    if (addIocForm) {
+      addIocForm.addEventListener("submit", function (e) {
+        e.preventDefault();
+        const hInp = document.getElementById("ioc-hash-input");
+        const dInp = document.getElementById("ioc-desc-input");
+        if (hInp && hInp.value.trim()) {
+          iocAction("add", hInp.value.trim(), dInp ? dInp.value.trim() : "").then(function () {
+            hInp.value = "";
+            if (dInp) dInp.value = "";
+          });
+        }
       });
     }
 
@@ -2165,7 +2662,7 @@
           state.isSubmittingLogin = false;
           if (submitBtn) {
             submitBtn.disabled = false;
-            submitBtn.textContent = "Unlock read-only console";
+            submitBtn.textContent = "Unlock console";
           }
         });
       });

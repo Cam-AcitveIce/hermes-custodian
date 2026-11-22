@@ -1161,6 +1161,45 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
                 apps_ok, apps_payload = _safe_apps(engine, settings if configured else None, inventory_data, updates_data)
                 self._send_json(HTTPStatus.OK if apps_ok else HTTPStatus.SERVICE_UNAVAILABLE, apps_payload)
                 return
+            if route == "/api/quarantine":
+                items = _scrub_value(engine.quarantine_list()) if hasattr(engine, "quarantine_list") else []
+                self._send_json(HTTPStatus.OK, {"items": items if isinstance(items, list) else []})
+                return
+            if route == "/api/allowlist":
+                entries = _scrub_value(engine.allowlist()) if hasattr(engine, "allowlist") else []
+                self._send_json(HTTPStatus.OK, {"entries": entries if isinstance(entries, list) else []})
+                return
+            if route == "/api/ioc":
+                hashes = _scrub_value(engine.ioc_list()) if hasattr(engine, "ioc_list") else []
+                self._send_json(HTTPStatus.OK, {"hashes": hashes if isinstance(hashes, list) else []})
+                return
+            if route == "/api/export":
+                fmt = (qs.get("format", ["json"])[0] or "json").strip().lower()
+                if fmt not in ("json", "csv"):
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_format", "message": "format must be json or csv."})
+                    return
+                snap = self._build_snapshot(event_limit=200)
+                stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+                if fmt == "csv":
+                    from . import remediation
+                    body = remediation.build_report_csv(snap.get("findings") or [])
+                    ctype = "text/csv; charset=utf-8"
+                    fname = f"warden-report-{stamp}.csv"
+                else:
+                    body = json.dumps(snap, indent=2, sort_keys=True).encode("utf-8")
+                    ctype = "application/json; charset=utf-8"
+                    fname = f"warden-report-{stamp}.json"
+                self.send_response(HTTPStatus.OK)
+                self._send_security_headers()
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
+                self.send_header("Content-Length", str(len(body)))
+                refreshed_cookie = getattr(self, "_refreshed_cookie_header", None)
+                if refreshed_cookie:
+                    self.send_header("Set-Cookie", refreshed_cookie)
+                self.end_headers()
+                self.wfile.write(body)
+                return
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
             return
         if route in _STATIC_ASSETS:
@@ -1351,11 +1390,137 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
             self._send_json(http_code, payload)
             return
 
+        if route == "/api/actions/scan-target":
+            target_path = body_obj.get("path")
+            if not isinstance(target_path, str) or not target_path.strip():
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid_target", "message": "path is required."})
+                return
+            if not hasattr(engine, "scan_target"):
+                self._send_json(HTTPStatus.NOT_IMPLEMENTED, {"ok": False, "error": "unavailable", "message": "Target scan unavailable."})
+                return
+            if not self.server._action_lock.acquire(blocking=False):
+                self._send_json(HTTPStatus.CONFLICT, {"ok": False, "error": "busy", "message": "Another scan or update action is already in progress."})
+                return
+            try:
+                res = engine.scan_target(target_path)
+                self._send_json(HTTPStatus.OK, _scrub_value(res))
+            except ValueError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid_target", "message": _sanitise_text(str(exc))})
+            except TimeoutError:
+                self._send_json(HTTPStatus.CONFLICT, {"ok": False, "error": "busy", "message": "Scan lock is currently held by another process."})
+            except Exception:
+                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": "scan_failed", "message": "Target scan failed."})
+            finally:
+                self.server._action_lock.release()
+            return
+
+        if route == "/api/actions/scope":
+            action = body_obj.get("action")
+            value = body_obj.get("value")
+            if not isinstance(action, str) or not action:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid_action", "message": "action is required."})
+                return
+            if not hasattr(engine, "update_scope_settings"):
+                self._send_json(HTTPStatus.NOT_IMPLEMENTED, {"ok": False, "error": "unavailable", "message": "Scope management unavailable."})
+                return
+            try:
+                updated = engine.update_scope_settings(action, value)
+                self._send_json(HTTPStatus.OK, {"ok": True, "settings": _scrub_value(updated)})
+            except ValueError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid_scope", "message": _sanitise_text(str(exc))})
+            except TimeoutError:
+                self._send_json(HTTPStatus.CONFLICT, {"ok": False, "error": "busy", "message": "Scope lock is busy; try again shortly."})
+            except Exception:
+                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": "scope_failed", "message": "Could not update scope settings."})
+            return
+
+        if route == "/api/actions/quarantine":
+            action = body_obj.get("action")
+            if action not in ("quarantine", "restore", "delete"):
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid_action", "message": "action must be quarantine, restore, or delete."})
+                return
+            if not self.server._action_lock.acquire(blocking=False):
+                self._send_json(HTTPStatus.CONFLICT, {"ok": False, "error": "busy", "message": "Another action is already in progress."})
+                return
+            try:
+                if action == "quarantine":
+                    entry = engine.quarantine_file(
+                        body_obj.get("path", ""),
+                        finding_id=body_obj.get("finding_id"),
+                        reason=str(body_obj.get("reason") or ""),
+                    )
+                    self._send_json(HTTPStatus.OK, {"ok": True, "item": _scrub_value(entry)})
+                elif action == "restore":
+                    entry = engine.restore_quarantine(body_obj.get("id", ""))
+                    self._send_json(HTTPStatus.OK, {"ok": True, "item": _scrub_value(entry)})
+                else:
+                    entry = engine.delete_quarantine(body_obj.get("id", ""))
+                    self._send_json(HTTPStatus.OK, {"ok": True, "item": _scrub_value(entry)})
+            except ValueError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "quarantine_invalid", "message": _sanitise_text(str(exc))})
+            except FileNotFoundError:
+                self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not_found", "message": "Target file not found."})
+            except Exception:
+                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": "quarantine_failed", "message": "Quarantine operation failed."})
+            finally:
+                self.server._action_lock.release()
+            return
+
+        if route == "/api/actions/allowlist":
+            action = body_obj.get("action")
+            if action not in ("add", "remove"):
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid_action", "message": "action must be add or remove."})
+                return
+            try:
+                if action == "add":
+                    entry = engine.allowlist_add(
+                        finding_id=body_obj.get("finding_id"),
+                        path=str(body_obj.get("path") or ""),
+                        rule=body_obj.get("rule"),
+                        reason=str(body_obj.get("reason") or ""),
+                    )
+                    self._send_json(HTTPStatus.OK, {"ok": True, "entry": _scrub_value(entry)})
+                else:
+                    removed = engine.allowlist_remove(str(body_obj.get("id") or ""))
+                    self._send_json(HTTPStatus.OK, {"ok": True, "removed": bool(removed)})
+            except ValueError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "allowlist_invalid", "message": _sanitise_text(str(exc))})
+            except Exception:
+                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": "allowlist_failed", "message": "Allowlist update failed."})
+            return
+
+        if route == "/api/actions/ioc":
+            action = body_obj.get("action")
+            if action not in ("add", "remove"):
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid_action", "message": "action must be add or remove."})
+                return
+            try:
+                if action == "add":
+                    entry = engine.ioc_add(str(body_obj.get("sha256") or ""), str(body_obj.get("description") or ""))
+                    self._send_json(HTTPStatus.OK, {"ok": True, "entry": _scrub_value(entry)})
+                else:
+                    removed = engine.ioc_remove(str(body_obj.get("sha256") or ""))
+                    self._send_json(HTTPStatus.OK, {"ok": True, "removed": bool(removed)})
+            except ValueError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "ioc_invalid", "message": _sanitise_text(str(exc))})
+            except Exception:
+                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": "ioc_failed", "message": "IOC blocklist update failed."})
+            return
+
     def do_POST(self) -> None:
         ok, route, _ = self._validate_host_and_query()
         if not ok:
             return
-        if route in ("/api/actions/scan", "/api/actions/update", "/api/actions/settings"):
+        if route in (
+            "/api/actions/scan",
+            "/api/actions/scan-target",
+            "/api/actions/update",
+            "/api/actions/settings",
+            "/api/actions/scope",
+            "/api/actions/quarantine",
+            "/api/actions/allowlist",
+            "/api/actions/ioc",
+        ):
             self._handle_action_post(route)
             return
         if route not in ("/api/session", "/api/logout"):

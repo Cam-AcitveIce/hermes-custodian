@@ -9,6 +9,7 @@ import uuid
 import os
 import time
 import math
+from typing import Any
 
 from .storage import Storage
 from . import _platform
@@ -218,6 +219,11 @@ class Engine:
             av_ran_ok = bool(raw_av_summary.get('system_av_used')) and sec_complete
             complete = complete and sec_complete
             av_summary = {k: v for k, v in raw_av_summary.items() if k != 'inspected_paths'}
+        # Filter out user-allowlisted false positives before persisting scan results
+        remediation = importlib.import_module('.remediation', __package__)
+        allowlist_entries = remediation.list_allowlist(self.store.root)
+        if allowlist_entries:
+            findings = [f for f in findings if not remediation.is_finding_allowlisted(f, allowlist_entries)]
         changes = []
         if baseline is not None:
             for path, item in sorted(files.items()):
@@ -314,6 +320,121 @@ class Engine:
             current.update(patch)
             self.store.save_settings(current)
             return current
+
+    def update_scope_settings(self, action: str, value: Any) -> dict:
+        """Add/remove watched_paths, exclusions, or update interval_seconds via validated setup()."""
+        current = dict(self.settings())
+        if action == 'add_path':
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError('Folder path is required')
+            target = str(Path(value.strip()).expanduser())
+            watched = list(current.get('watched_paths') or [])
+            if target not in watched:
+                watched.append(target)
+            current['watched_paths'] = watched
+        elif action == 'remove_path':
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError('Folder path is required')
+            watched = [p for p in (current.get('watched_paths') or []) if p != value]
+            profiles = [p for p in (current.get('profiles') or []) if p != value]
+            if not (watched or profiles):
+                raise ValueError('At least one watched folder or profile must remain configured')
+            current['watched_paths'] = watched
+            current['profiles'] = profiles
+        elif action == 'add_exclusion':
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError('Exclusion pattern is required')
+            pat = value.strip()
+            excl = list(current.get('exclusions') or [])
+            if pat not in excl:
+                excl.append(pat)
+            current['exclusions'] = excl
+        elif action == 'remove_exclusion':
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError('Exclusion pattern is required')
+            current['exclusions'] = [e for e in (current.get('exclusions') or []) if e != value]
+        elif action == 'set_interval':
+            if type(value) is not int:
+                raise ValueError('interval_seconds must be an integer')
+            current['interval_seconds'] = value
+        else:
+            raise ValueError('Unsupported scope action')
+        return self.setup(current)
+
+    def quarantine_list(self) -> list[dict]:
+        remediation = importlib.import_module('.remediation', __package__)
+        return remediation.list_quarantine(self.store.root)
+
+    def quarantine_file(self, path: str, *, finding_id: str | None = None, reason: str = '') -> dict:
+        remediation = importlib.import_module('.remediation', __package__)
+        with self.store.scan_lock(self.lock_timeout):
+            roots, _ = self._scope(self.settings())
+            entry = remediation.quarantine_file(
+                self.store.root, path, allowed_roots=roots, finding_id=finding_id, reason=reason
+            )
+            with self.store.connection() as db:
+                db.execute(
+                    'INSERT INTO events(timestamp,kind,path,summary) VALUES (?,?,?,?)',
+                    (entry['quarantined_at'], 'file_quarantined', entry['original_path'], entry['reason']),
+                )
+            return entry
+
+    def restore_quarantine(self, qid: str) -> dict:
+        remediation = importlib.import_module('.remediation', __package__)
+        with self.store.scan_lock(self.lock_timeout):
+            entry = remediation.restore_quarantine(self.store.root, qid)
+            with self.store.connection() as db:
+                db.execute(
+                    'INSERT INTO events(timestamp,kind,path,summary) VALUES (?,?,?,?)',
+                    (datetime.now(timezone.utc).isoformat(), 'quarantine_restored', entry['original_path'], 'File restored from quarantine'),
+                )
+            return entry
+
+    def delete_quarantine(self, qid: str) -> dict:
+        remediation = importlib.import_module('.remediation', __package__)
+        with self.store.scan_lock(self.lock_timeout):
+            entry = remediation.delete_quarantine(self.store.root, qid)
+            with self.store.connection() as db:
+                db.execute(
+                    'INSERT INTO events(timestamp,kind,path,summary) VALUES (?,?,?,?)',
+                    (datetime.now(timezone.utc).isoformat(), 'quarantine_deleted', entry['original_path'], 'Quarantined file deleted permanently'),
+                )
+            return entry
+
+    def allowlist(self) -> list[dict]:
+        remediation = importlib.import_module('.remediation', __package__)
+        return remediation.list_allowlist(self.store.root)
+
+    def allowlist_add(self, *, finding_id: str | None = None, path: str = '', rule: str | None = None, reason: str = '') -> dict:
+        remediation = importlib.import_module('.remediation', __package__)
+        with self.store.scan_lock(self.lock_timeout):
+            return remediation.add_allowlist(
+                self.store.root, finding_id=finding_id, path=path, rule=rule, reason=reason
+            )
+
+    def allowlist_remove(self, entry_id: str) -> bool:
+        remediation = importlib.import_module('.remediation', __package__)
+        with self.store.scan_lock(self.lock_timeout):
+            return remediation.remove_allowlist(self.store.root, entry_id)
+
+    def ioc_list(self) -> list[dict]:
+        remediation = importlib.import_module('.remediation', __package__)
+        return remediation.list_ioc_entries(self.store.root)
+
+    def ioc_add(self, sha256_hex: str, description: str = '') -> dict:
+        remediation = importlib.import_module('.remediation', __package__)
+        with self.store.scan_lock(self.lock_timeout):
+            return remediation.add_ioc_hash(self.store.root, sha256_hex, description)
+
+    def ioc_remove(self, sha256_hex: str) -> bool:
+        remediation = importlib.import_module('.remediation', __package__)
+        with self.store.scan_lock(self.lock_timeout):
+            return remediation.remove_ioc_hash(self.store.root, sha256_hex)
+
+    def scan_target(self, target_path: str) -> dict:
+        remediation = importlib.import_module('.remediation', __package__)
+        with self.store.scan_lock(self.lock_timeout):
+            return remediation.scan_custom_target(target_path, self.settings(), state_dir=self.store.root)
 
     def findings(self) -> list[dict]:
         return self.store.findings()
