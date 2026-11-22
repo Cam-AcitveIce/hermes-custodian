@@ -888,6 +888,7 @@ class WebStaticAndRenderingTest(unittest.TestCase):
                 "/api/actions/scan", "/api/actions/scan-target", "/api/actions/update",
                 "/api/actions/settings", "/api/actions/scope",
                 "/api/actions/quarantine", "/api/actions/allowlist", "/api/actions/ioc",
+                "/api/actions/clear-history",
             ))
 
         # No emoji anywhere in assets
@@ -1269,6 +1270,34 @@ class WebActionsAndAppsTest(unittest.TestCase):
 
         code_bad, _ = self._request("GET", "/api/export?format=xml")
         self.assertEqual(code_bad, 400)
+
+    def test_trusted_origin_opt_in_accepts_exact_proxy_host_and_rejects_others(self) -> None:
+        # Invalid trusted_origin rejected
+        for bad in ("https://node.ts.net/path", "http://example.com:8787", "https://*.ts.net", "ftp://node.ts.net"):
+            with self.assertRaises(ValueError):
+                make_server(self.engine, port=0, auth=self.auth, trusted_origin=bad)
+
+        srv = make_server(self.engine, port=0, auth=self.auth, trusted_origin="https://nova.tail80be23.ts.net:8787")
+        t = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+        t.start()
+        try:
+            # Exact trusted Host works
+            conn = http.client.HTTPConnection("127.0.0.1", srv.bound_port, timeout=5)
+            conn.request("GET", "/api/session", headers={"Host": "nova.tail80be23.ts.net:8787"})
+            r_ok = conn.getresponse()
+            r_ok.read()
+            self.assertEqual(r_ok.status, 200)
+
+            # Untrusted Host still rejected with 400
+            conn2 = http.client.HTTPConnection("127.0.0.1", srv.bound_port, timeout=5)
+            conn2.request("GET", "/api/session", headers={"Host": "evil.ts.net:8787"})
+            r_bad = conn2.getresponse()
+            r_bad.read()
+            self.assertEqual(r_bad.status, 400)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+            t.join(timeout=2)
 
 
 if __name__ == "__main__":

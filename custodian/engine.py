@@ -439,6 +439,10 @@ class Engine:
     def findings(self) -> list[dict]:
         return self.store.findings()
 
+    def clear_finding_history(self) -> int:
+        with self.store.scan_lock(self.lock_timeout):
+            return self.store.clear_closed_findings()
+
     def events(self, limit=100) -> list[dict]:
         if type(limit) is not int or not 1 <= limit <= 1000:
             raise ValueError('limit must be between 1 and 1000')

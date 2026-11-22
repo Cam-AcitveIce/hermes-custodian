@@ -67,6 +67,7 @@ def configure_parser(parser, *, state_dir=None):
             cmd.add_argument('--once', action='store_true', help='Run one monitoring cycle and exit')
         if name == 'dashboard':
             cmd.add_argument('--port', type=int, default=0)
+            cmd.add_argument('--trusted-origin', default=None, help='Optional exact reverse-proxy origin (e.g. https://node.tailnet.ts.net:8787 for Tailscale Serve)')
         if name == 'updates':
             upd_subs = cmd.add_subparsers(dest='updates_action', required=False)
             plan_cmd = upd_subs.add_parser('security-plan', help='Preview native security-only unattended-upgrades policy (read-only)')
@@ -149,7 +150,7 @@ def run_command(args, parser):
             engine = Engine(args.state_dir)
             if args.custodian_command == 'dashboard':
                 from .web import run_dashboard
-                run_dashboard(engine, port=args.port)
+                run_dashboard(engine, port=args.port, trusted_origin=getattr(args, 'trusted_origin', None))
                 return 0
             if args.custodian_command == 'monitor':
                 from .monitor import run_monitor

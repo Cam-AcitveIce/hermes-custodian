@@ -166,6 +166,37 @@ def _scrub_value(value: Any) -> Any:
     return value
 
 
+def _validate_trusted_origin(origin: str | None) -> tuple[str, str] | None:
+    """Validate an explicit opt-in reverse-proxy origin (e.g. Tailscale Serve HTTPS URL).
+
+    Returns (normalized_origin, expected_host_header) or None if unset.
+    """
+    if origin is None:
+        return None
+    if not isinstance(origin, str) or not origin.strip():
+        raise ValueError("trusted_origin must be a valid origin URL (e.g. https://host.ts.net:8787).")
+    raw = origin.strip().rstrip("/")
+    parsed = urlsplit(raw)
+    if parsed.scheme not in ("https", "http"):
+        raise ValueError("trusted_origin scheme must be https or http.")
+    if not parsed.hostname or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
+        raise ValueError("trusted_origin must be an exact scheme://host[:port] origin without path, query, or userinfo.")
+    if "*" in parsed.netloc or any(ord(c) <= 32 or ord(c) >= 127 for c in parsed.netloc):
+        raise ValueError("trusted_origin host contains invalid characters.")
+    if parsed.scheme == "http":
+        # Allow plain HTTP only for loopback or Tailscale CGNAT (100.64.0.0/10)
+        try:
+            ip = ipaddress.ip_address(parsed.hostname)
+            if not (ip.is_loopback or ip in ipaddress.ip_network("100.64.0.0/10")):
+                raise ValueError("Plain http trusted_origin is only allowed for loopback or Tailscale IPs; use https://.")
+        except ValueError as exc:
+            if "Plain http" in str(exc):
+                raise
+            if parsed.hostname != "localhost":
+                raise ValueError("Plain http trusted_origin is only allowed for loopback or Tailscale IPs; use https://.")
+    return f"{parsed.scheme}://{parsed.netloc}", parsed.netloc
+
+
 def _validate_loopback_host(host: str) -> str:
     if not isinstance(host, str) or not host.strip():
         raise ValueError("Host must be a non-empty loopback address.")
@@ -658,6 +689,7 @@ class CustodianDashboardServer(ThreadingHTTPServer):
         max_failed_logins: int = 5,
         rate_limit_window_seconds: int = 60,
         clock: Callable[[], float] | None = None,
+        trusted_origin: str | None = None,
     ) -> None:
         if ":" in server_address[0]:
             self.address_family = socket.AF_INET6
@@ -671,6 +703,14 @@ class CustodianDashboardServer(ThreadingHTTPServer):
         host_fmt = f"[{self.bound_host}]" if ":" in self.bound_host else self.bound_host
         self.expected_host_header = f"{host_fmt}:{self.bound_port}"
         self.base_url = f"http://{self.expected_host_header}"
+        trusted = _validate_trusted_origin(trusted_origin)
+        self.allowed_hosts = frozenset(
+            {self.expected_host_header, trusted[1]} if trusted else {self.expected_host_header}
+        )
+        self.allowed_origins = frozenset(
+            {self.base_url, trusted[0]} if trusted else {self.base_url}
+        )
+        self.trusted_origin = trusted[0] if trusted else None
         self.session_ttl_seconds = max(1, int(session_ttl_seconds))
         self.absolute_session_seconds = max(self.session_ttl_seconds, int(absolute_session_seconds))
         self.max_failed_logins = max(1, int(max_failed_logins))
@@ -958,7 +998,7 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
 
     def _validate_host_and_query(self) -> tuple[bool, str, dict[str, list[str]]]:
         host_headers = self.headers.get_all("Host") or []
-        if len(host_headers) != 1 or host_headers[0] != self.server.expected_host_header:
+        if len(host_headers) != 1 or host_headers[0] not in self.server.allowed_hosts:
             self._send_json(
                 HTTPStatus.BAD_REQUEST,
                 {"error": "invalid_host", "message": "Exact loopback Host:port header required."},
@@ -1004,7 +1044,7 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
 
     def _require_exact_origin(self) -> bool:
         origin = self.headers.get("Origin")
-        if not origin or origin != self.server.base_url:
+        if not origin or origin not in self.server.allowed_origins:
             self._send_json(
                 HTTPStatus.FORBIDDEN,
                 {"error": "invalid_origin", "message": "Exact loopback Origin header required."},
@@ -1507,6 +1547,19 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": "ioc_failed", "message": "IOC blocklist update failed."})
             return
 
+        if route == "/api/actions/clear-history":
+            if not hasattr(engine, "clear_finding_history"):
+                self._send_json(HTTPStatus.NOT_IMPLEMENTED, {"ok": False, "error": "unavailable", "message": "History cleanup unavailable."})
+                return
+            try:
+                removed = int(engine.clear_finding_history())
+                self._send_json(HTTPStatus.OK, {"ok": True, "removed": removed})
+            except TimeoutError:
+                self._send_json(HTTPStatus.CONFLICT, {"ok": False, "error": "busy", "message": "Scan lock is busy; try again shortly."})
+            except Exception:
+                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": "clear_failed", "message": "Could not clear finding history."})
+            return
+
     def do_POST(self) -> None:
         ok, route, _ = self._validate_host_and_query()
         if not ok:
@@ -1520,6 +1573,7 @@ class _DashboardRequestHandler(BaseHTTPRequestHandler):
             "/api/actions/quarantine",
             "/api/actions/allowlist",
             "/api/actions/ioc",
+            "/api/actions/clear-history",
         ):
             self._handle_action_post(route)
             return
@@ -1651,12 +1705,14 @@ def make_server(
     max_failed_logins: int = 5,
     rate_limit_window_seconds: int = 60,
     clock: Callable[[], float] | None = None,
+    trusted_origin: str | None = None,
 ) -> CustodianDashboardServer:
     """Create a loopback-bound CustodianDashboardServer without starting its loop."""
     if isinstance(host, int):
         port = host
         host = "127.0.0.1"
     validated_host = _validate_loopback_host(host)
+    _validate_trusted_origin(trusted_origin)
     resolved_auth = _resolve_auth(engine, auth)
     bind_ip = "::1" if validated_host == "::1" else "127.0.0.1"
     return CustodianDashboardServer(
@@ -1670,6 +1726,7 @@ def make_server(
         max_failed_logins=max_failed_logins,
         rate_limit_window_seconds=rate_limit_window_seconds,
         clock=clock,
+        trusted_origin=trusted_origin,
     )
 
 
@@ -1681,12 +1738,15 @@ def run_dashboard(
     auth: Any | None = None,
     output: TextIO | None = None,
     _on_ready: Callable[[CustodianDashboardServer], None] | None = None,
+    trusted_origin: str | None = None,
 ) -> None:
     """Run the loopback dashboard until interrupted (Ctrl-C), then close cleanly."""
     out = output if output is not None else sys.stdout
-    srv = make_server(engine, host=host, port=port, auth=auth)
+    srv = make_server(engine, host=host, port=port, auth=auth, trusted_origin=trusted_origin)
     try:
         out.write(f"Hermes Security Warden Dashboard URL: {srv.base_url}\n")
+        if srv.trusted_origin:
+            out.write(f"Trusted Proxy Origin: {srv.trusted_origin}\n")
         out.flush()
         if _on_ready is not None:
             _on_ready(srv)

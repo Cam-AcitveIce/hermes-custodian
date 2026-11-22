@@ -178,6 +178,22 @@ class Storage:
         with self.connection() as db:
             return [json.loads(row[0]) for row in db.execute('SELECT data FROM findings ORDER BY id')]
 
+    def clear_closed_findings(self) -> int:
+        """Delete historical resolved and out_of_scope findings while preserving open findings."""
+        with self.connection() as db:
+            rows = list(db.execute('SELECT id, data FROM findings'))
+            to_delete = []
+            for fid, raw in rows:
+                try:
+                    status = json.loads(raw).get('status')
+                except ValueError:
+                    continue
+                if status in ('resolved', 'out_of_scope'):
+                    to_delete.append((fid,))
+            if to_delete:
+                db.executemany('DELETE FROM findings WHERE id=?', to_delete)
+            return len(to_delete)
+
     def last_scan(self):
         with self.connection() as db:
             row = db.execute('SELECT data FROM scans ORDER BY timestamp DESC LIMIT 1').fetchone()

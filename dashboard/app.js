@@ -460,7 +460,7 @@
   /* Browser DOM Application Controller */
   const state = {
     activeView: "overview",
-    statusFilter: "all",
+    statusFilter: "open",
     severityFilter: "all",
     categoryFilter: "all",
     searchQuery: "",
@@ -2538,8 +2538,36 @@
     const allFindingsBtn = document.getElementById("overview-all-findings-btn");
     if (allFindingsBtn) {
       allFindingsBtn.addEventListener("click", function () {
-        state.statusFilter = "all";
+        state.statusFilter = "open";
         switchView("findings");
+      });
+    }
+
+    const clearHistoryBtn = document.getElementById("btn-clear-history");
+    if (clearHistoryBtn) {
+      clearHistoryBtn.addEventListener("click", function () {
+        if (typeof window !== "undefined" && typeof window.confirm === "function" && !window.confirm("Clear all old resolved and out-of-scope findings from history? Active open findings will stay.")) return;
+        clearHistoryBtn.disabled = true;
+        fetch("/api/actions/clear-history", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json", "Accept": "application/json" },
+          body: "{}"
+        }).then(function (resp) {
+          if (resp.status === 401) { showLogin(); return null; }
+          return resp.json().catch(function () { return { ok: false }; });
+        }).then(function (res) {
+          if (res && res.ok) {
+            showToast("Cleared " + (res.removed || 0) + " historical finding(s).", "success");
+            loadSnapshot();
+          } else {
+            showToast((res && res.message) || "Could not clear history.", "error");
+          }
+        }).catch(function () {
+          showToast("Connection error clearing history.", "error");
+        }).finally(function () {
+          clearHistoryBtn.disabled = false;
+        });
       });
     }
 

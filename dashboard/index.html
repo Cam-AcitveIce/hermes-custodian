@@ -289,9 +289,9 @@
           <div class="panel">
             <div class="toolbar">
               <div class="toolbar-group" role="group" aria-label="Filter by status">
-                <button type="button" class="filter-pill is-active" data-status-filter="all">All (0)</button>
-                <button type="button" class="filter-pill" data-status-filter="open">Open (0)</button>
+                <button type="button" class="filter-pill is-active" data-status-filter="open">Open (0)</button>
                 <button type="button" class="filter-pill" data-status-filter="resolved">Resolved (0)</button>
+                <button type="button" class="filter-pill" data-status-filter="all">All (0)</button>
               </div>
 
               <div class="toolbar-group" role="group" aria-label="Filter by severity">
@@ -330,6 +330,7 @@
                 <label for="findings-search" class="sr-only">Search findings</label>
                 <input type="search" id="findings-search" class="control-input" placeholder="Search title, category, path, evidence...">
               </div>
+              <button type="button" id="btn-clear-history" class="quiet-btn" title="Remove old resolved and out-of-scope permission history">Clear history</button>
             </div>
 
             <div class="table-wrap">
