@@ -629,7 +629,8 @@ def _run_clamav_scan(
     try:
         fd, list_path = tempfile.mkstemp(prefix="warden-clamav-", suffix=".txt")
         try:
-            os.fchmod(fd, 0o600)
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write("\n".join(safe_list) + "\n")
         except BaseException:
